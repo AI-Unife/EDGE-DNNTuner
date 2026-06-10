@@ -235,3 +235,82 @@ class TunerDataset:
         print(self.Y_train.shape, 'Y train label samples')
         print(self.X_test.shape, 'X test samples')
         print(self.Y_test.shape, 'Y test label samples')
+
+    def _load_cimads_dir(self, root_dir: str, resize=None, label_to_int=None):
+        """
+        Load images from a CIMADS-structured directory.
+        Layout: root_dir/{denom}_*/{orient}/{serial}_{Front|Rear}.png
+        The label is "{denom}_{orient}" (e.g. "1_A", "100_D").
+        """
+        from PIL import Image
+
+        images = []
+        labels_str = []
+
+        for denom_dir in sorted(os.listdir(root_dir)):
+            denom_path = os.path.join(root_dir, denom_dir)
+            if not os.path.isdir(denom_path):
+                continue
+            denomination = denom_dir.split("_")[0]  # "1_CCA_A" -> "1"
+
+            for orient in sorted(os.listdir(denom_path)):
+                orient_path = os.path.join(denom_path, orient)
+                if not os.path.isdir(orient_path):
+                    continue
+                label = f"{denomination}_{orient}"  # e.g. "1_A", "100_D"
+
+                for fname in sorted(os.listdir(orient_path)):
+                    if not fname.lower().endswith(".png"):
+                        continue
+                    img = Image.open(os.path.join(orient_path, fname)).convert("RGB")
+                    if resize is not None:
+                        img = img.resize(resize)
+                    images.append(np.array(img))
+                    labels_str.append(label)
+
+        if label_to_int is None:
+            unique_labels = sorted(
+                set(labels_str),
+                key=lambda s: (int(s.split("_")[0]), s.split("_")[1])
+            )
+            label_to_int = {lbl: i for i, lbl in enumerate(unique_labels)}
+
+        X = np.stack(images)
+        Y = np.array([label_to_int[l] for l in labels_str], dtype=np.int64)
+        return X, Y, label_to_int
+
+    def load_cca(self, cca_dir: str = "/hpc/home/bzzlca/CIMADS/DATABASE_CCA",
+                 test_split: float = 0.2, resize=None):
+        """Load DATABASE_CCA banknote dataset with a stratified train/test split."""
+        X, Y, label_to_int = self._load_cimads_dir(cca_dir, resize=resize)
+        self.n_classes = len(label_to_int)
+
+        rng = np.random.default_rng(42)
+        train_idx, test_idx = [], []
+        for cls in np.unique(Y):
+            idx = rng.permutation(np.where(Y == cls)[0])
+            n_test = max(1, int(len(idx) * test_split))
+            test_idx.extend(idx[:n_test].tolist())
+            train_idx.extend(idx[n_test:].tolist())
+
+        self.X_train = X[train_idx]
+        self.Y_train = Y[train_idx]
+        self.X_test  = X[test_idx]
+        self.Y_test  = Y[test_idx]
+
+        print(self.X_train.shape[0], 'train samples')
+        print(self.X_test.shape[0], 'test samples')
+
+    def load_cim(self, cim_dir: str = "/hpc/home/bzzlca/CIMADS/DATABASE_CIM",
+                 resize=None):
+        """Load DATABASE_CIM banknote dataset (DataSet=train, ValidationSet=test)."""
+        train_dir = os.path.join(cim_dir, "DataSet")
+        test_dir  = os.path.join(cim_dir, "ValidationSet")
+
+        self.X_train, self.Y_train, label_to_int = self._load_cimads_dir(train_dir, resize=resize)
+        self.X_test,  self.Y_test,  _            = self._load_cimads_dir(test_dir,  resize=resize,
+                                                                          label_to_int=label_to_int)
+        self.n_classes = len(label_to_int)
+
+        print(self.X_train.shape[0], 'train samples')
+        print(self.X_test.shape[0], 'test samples')

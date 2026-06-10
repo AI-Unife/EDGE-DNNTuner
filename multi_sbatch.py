@@ -1,20 +1,22 @@
 import subprocess
 from itertools import product
 
-datasets_cifar = ['cifar10', 'cifar100']
-optimizers = ['standard', 'RS'] # 'filtered', 'RS_ruled', 'basic', 
-seeds = [42, 123, 96, 7, 84]
+datasets_cifar = ['cim']
+optimizers = ['standard', 'RS', 'filtered', 'RS_ruled', 'basic']
+seeds = [42, 123, 96]
+weights = [0.1, 0.3, 0.5, 0.7, 0.9]  # Example weights for flops and latency in the combined score
 
 
 def generate_jobs():
     job_configs = []
 
     # CIFAR - flops
-    for optimizer, seed, dataset in product(optimizers, seeds, datasets_cifar):
+    for optimizer, seed, dataset, weight in product(optimizers, seeds, datasets_cifar, weights):
         job_configs.append({
             "data_name": dataset,
             "opt": optimizer,
             "seed": seed,
+            "weight": weight
         })
     return job_configs
 
@@ -26,7 +28,7 @@ def save_job_configs_to_file(job_configs, filename="params.txt"):
 
     with open(filename, "w") as f:
         for config in job_configs:
-            line = ",".join(str(config[k]) for k in ["data_name", "opt", "seed"])
+            line = ",".join(str(config[k]) for k in ["data_name", "opt", "seed", "weight"])
             f.write(line + ",flops_module\n")
             
 # generate_params.py
@@ -62,7 +64,7 @@ def generate_params_file(output_path: str = "params.txt"):
 
 def main():
     job_configs = generate_jobs()
-    save_job_configs_to_file(job_configs, "params_cifar.txt")
+    save_job_configs_to_file(job_configs, "params_w.txt")
     # generate_params_file()
 
 if __name__ == "__main__":

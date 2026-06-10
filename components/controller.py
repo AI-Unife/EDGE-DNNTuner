@@ -42,7 +42,7 @@ class controller:
         # Internal counters
         self.count_new_fc = 0
         self.count_new_cv = 0
-        self.max_fc = 10
+        self.max_fc = 4
         self.start_conv = 2
         self.max_conv = self.count_max_conv(base_blocks=self.start_conv)
         self.count_no_probs = 0
@@ -90,22 +90,25 @@ class controller:
         }
         self.lacc: float = lacc_dict.get(self.exp_cfg.dataset, 0.20)
         self.hloss: float = np.log(self.dataset.n_classes)
-        self.acc_w = 0.7  # weight of accuracy in combined score
         self.vanish_th = 1e-8
         self.exploding_th = 100.0
-
+        self.weight_flops: float = 0.0
+        self.weight_latency: float = 0.0
         # Improvement checker + modules
         self.imp_checker = ImprovementChecker(self.db, self.lfi)
         self.modules = module(self.exp_cfg.mod_list)
         if "flops_module" in self.exp_cfg.mod_list:
             self.flops_th = self.modules.get_module("flops_module").flops_th
             self.params_th = self.modules.get_module("flops_module").nparams_th
+            self.weight_flops = self.exp_cfg.w_flops
         if "hardware_module" in self.exp_cfg.mod_list:
             max_latency = self.modules.get_module("hardware_module").max_latency
             max_cost = self.modules.get_module("hardware_module").max_cost
             weight_cost = self.modules.get_module("hardware_module").weight_cost
             self.latency_th = round((max_cost * weight_cost) + (max_latency * (1-weight_cost)), 4)
+            self.weight_latency = self.exp_cfg.w_HW
 
+        self.acc_w = 1-(self.weight_flops + self.weight_latency)  # Remaining weight for accuracy in the combined score
         # Optimization objective bookkeeping
         self.best_score: float = 1e10 #float("inf")  # lower is better if we minimize
         self.convergence: bool = False

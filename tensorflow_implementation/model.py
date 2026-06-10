@@ -125,7 +125,7 @@ class TFModel(TunerModel):
             # x = Dropout(params["dr_f"])(x)
             x = MaxPooling2D(pool_size=(2, 2))(x)
 
-        x = GlobalAveragePooling2D()(x) if batch else Flatten()(x)
+        x = GlobalAveragePooling2D()(x) #if batch else Flatten()(x)
         
         # If ROI dataset, concatenate flattened pos with x
         pos_input = None

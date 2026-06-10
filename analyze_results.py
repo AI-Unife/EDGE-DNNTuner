@@ -47,6 +47,7 @@ class ExperimentResult:
     hw_total_cost: Optional[float]
     hw_config: Optional[str]
     score: Optional[float]
+    w_flops: Optional[float] = None
     # hyperparams: Optional[Dict[str, Any]]
     score: Optional[float] = None  # Calculated as -accuracy if no modules are present
 
@@ -127,6 +128,7 @@ class ResultsAnalyzer:
                 hw_total_cost=hw_data[i][2] if hw_data and i < len(hw_data) else None,
                 hw_config=hw_data[i][3] if hw_data and i < len(hw_data) else None,
                 score=scores[i] if scores and i < len(scores) else None,
+                w_flops=self.config.get("w_flops") if self.has_flops_module else None,
                 # hyperparams=hyperparams_list[i] if i < len(hyperparams_list) else None,
             )
             
@@ -364,7 +366,7 @@ class ResultsAnalyzer:
     def _recompute_score(self, result: ExperimentResult) -> Optional[float]:
         """Recompute score when score_report is missing, following controller training logic."""
         PENALTY_SCORE = 1e10
-        acc_w = 0.7
+        acc_w = 1 - (result.w_flops if result.w_flops is not None else 0.3)
 
         accuracy = self._safe_float(result.accuracy)
         nparams = self._safe_float(result.nparams)
@@ -651,8 +653,13 @@ def analyze_all_experiments(parent_dir: Path, output_dir: Optional[Path] = None)
                     summary_row[f'{key}'] = value
             
             summary_data.append(summary_row)
-            print(f"  Best result: iteration {best_result.iteration}, "
-                  f"accuracy={best_result.accuracy:.4f}, score={best_result.score:.4f}\n")
+            if best_result.iteration is not None:
+                acc_str = f"{best_result.accuracy:.4f}" if best_result.accuracy is not None else "N/A"
+                score_str = f"{best_result.score:.4f}" if best_result.score is not None else "N/A"
+                print(f"  Best result: iteration {best_result.iteration}, "
+                    f"accuracy={acc_str}, score={score_str}\n")
+            else:
+                print(" No valid best result\n")
         else:
             print(f"  No valid results found\n")
     

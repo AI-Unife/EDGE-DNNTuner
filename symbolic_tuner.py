@@ -233,9 +233,9 @@ def parse_args() -> argparse.Namespace:
                         help="Weight HW loss")
     parser.add_argument('--lacc', type=float, default=0.30,
                         help="if 1-acc>lacc --> Underfitting")
-    parser.add_argument('--flops_th', type=int, default=150000000,
+    parser.add_argument('--flops_th', type=int, default=15000000000,
                          help="Max number of FLOPS")
-    parser.add_argument('--nparams_th', type=int, default=15000000000,
+    parser.add_argument('--nparams_th', type=int, default=150000000,
                         help="Max number of PARAMS")
     parser.add_argument(
         "--opt", type=str, default="filtered",
@@ -326,8 +326,12 @@ if __name__ == "__main__":
         dataset.load_roi_gesture()
     elif dataset_name == "tinyimagenet":
         dataset.load_tiny_imagenet()
+    elif dataset_name == "cca":
+        dataset.load_cca()
+    elif dataset_name == "cim":
+        dataset.load_cim()
     else:
-        print(f"Unknown dataset: {cfg.dataset}. Supported: cifar10, cifar100, mnist, light, gesture, roigesture_matrix and roigesture_coords.")
+        print(f"Unknown dataset: {cfg.dataset}. Supported: cifar10, cifar100, mnist, light, gesture, roigesture_matrix, roigesture_coords, cca, cim.")
         exit(1)
 
     # --- 3. Controller and Space Setup ---
