@@ -68,6 +68,7 @@ class StoringExperience:
         """
         conn = self.connection()
         c = conn.cursor()
+        print("[DEBUG] Inserting score into db: ", score)
         try:
             c.execute('INSERT INTO ranking (score) VALUES (' + str(score) + ')')
         except Error as e:
@@ -111,6 +112,7 @@ class StoringExperience:
         c.execute("SELECT * FROM ranking")
         res = self.formatting(c.fetchall())
         conn.close()
+        print("[DEBUG] Getting score from db: ", res)
         return res
 
 

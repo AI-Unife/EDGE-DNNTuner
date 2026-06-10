@@ -279,8 +279,6 @@ if __name__ == "__main__":
     # --- 1. Configuration Setup ---
     args = parse_args()
     
-    
-    ### IMPROVEMENT: Use pathlib for config path ###
     exp_dir = Path(args.name)
     exp_dir.mkdir(parents=True, exist_ok=True)
     
