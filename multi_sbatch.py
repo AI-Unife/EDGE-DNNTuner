@@ -1,22 +1,22 @@
 import subprocess
 from itertools import product
 
-datasets_cifar = ['cim']
-optimizers = ['standard', 'RS', 'filtered', 'RS_ruled', 'basic']
-seeds = [42, 123, 96]
-weights = [0.1, 0.3, 0.5, 0.7, 0.9]  # Example weights for flops and latency in the combined score
+datasets_cifar = ['tinyimagnet']
+optimizers = ['filtered', 'RS_ruled', 'basic', 'standard', 'RS']
+seeds = [42, 123, 96, 7, 84]
+weights = [0.5, 0.7]  # Example weights for flops and latency in the combined score
 
 
 def generate_jobs():
     job_configs = []
 
     # CIFAR - flops
-    for optimizer, seed, dataset, weight in product(optimizers, seeds, datasets_cifar, weights):
+    for w, optimizer, seed, dataset in product(weights, optimizers, seeds, datasets_cifar,):
         job_configs.append({
             "data_name": dataset,
             "opt": optimizer,
             "seed": seed,
-            "weight": weight
+            "weight": w
         })
     return job_configs
 
@@ -64,7 +64,7 @@ def generate_params_file(output_path: str = "params.txt"):
 
 def main():
     job_configs = generate_jobs()
-    save_job_configs_to_file(job_configs, "params_w.txt")
+    save_job_configs_to_file(job_configs, "params_w_tiny.txt")
     # generate_params_file()
 
 if __name__ == "__main__":

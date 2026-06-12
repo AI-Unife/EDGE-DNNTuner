@@ -261,6 +261,11 @@ class controller:
             self.flops_ok = (self.nn.flops is None) or (self.nn.flops <= self.flops_th and self.nn.nparams <= self.params_th)
         else:
             self.flops_ok = True
+            
+        if "test_pareto_module" in self.exp_cfg.mod_list:
+            self.pareto_ok = (self.nn.flops is None) or (self.nn.flops <= self.flops_th and self.nn.nparams <= self.params_th)
+        else:
+            self.pareto_ok = True
         if "hardware_module" in self.exp_cfg.mod_list:
             self.latency_ok = (self.nn.tot_latency_cost is None) or (self.nn.tot_latency_cost <= self.latency_th)
         else:
@@ -272,7 +277,7 @@ class controller:
             print(f"[WARNING] Constraint Violated: Latency Cost {self.nn.tot_latency_cost} > {self.latency_th}")
 
         # 4. Training Decision
-        if self.flops_ok and self.latency_ok:
+        if self.flops_ok and self.latency_ok and self.pareto_ok:
             # --- START TRAINING ---
             self.scoreNN, self.history, self.model = self.nn.training(params)
             
@@ -468,8 +473,10 @@ class controller:
             
         if "flops_module" not in self.exp_cfg.mod_list:
             f = open(f"{self.exp_cfg.name}/algorithm_logs/params_report.txt", "a")
-            params = self.backend.get_params(self.model)
-            f.write(str(params) + "\n")
+            flops, params = self.backend.get_flops(self.model)
+            # params = self.backend.get_params(self.model)
+            # flops = 0.0
+            f.write(str(params) + " " + str(flops) + "\n")
             f.close()
         
 

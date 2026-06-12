@@ -53,16 +53,16 @@ class search_space:
         ])
         for b in range(1, max_block + 1):
             conv_name = f'new_conv_{b}'
-            if self.cfg.opt in ['standard', 'RS']:
-                self.search_space.dimensions.append(Integer(0, 16, name=conv_name))
-            else:
-                self.search_space.dimensions.append(Integer(-1, 0, name=conv_name))
+            # if self.cfg.opt in ['standard', 'RS']:
+            self.search_space.dimensions.append(Integer(0, 16, name=conv_name))
+            # else:
+            #     self.search_space.dimensions.append(Integer(-1, 0, name=conv_name))
         for d in range(1, max_dense + 1):
             dense_name = f'new_fc_{d}'
-            if self.cfg.opt in ['standard', 'RS']:
-                self.search_space.dimensions.append(Integer(0, 32, name=dense_name))
-            else:
-                self.search_space.dimensions.append(Integer(-1, 0, name=dense_name))
+            # if self.cfg.opt in ['standard', 'RS']:
+            self.search_space.dimensions.append(Integer(0, 32, name=dense_name))
+            # else:
+            #     self.search_space.dimensions.append(Integer(-1, 0, name=dense_name))
 
         return self.search_space
 

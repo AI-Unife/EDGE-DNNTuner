@@ -625,11 +625,13 @@ def analyze_all_experiments(parent_dir: Path, output_dir: Optional[Path] = None)
         best_result = analyzer.get_best_result()
         if best_result:
             if best_result.flops is None:
-                recalculated_flops = _calculate_flops(exp_dir)
-                print(f"  FLOPS recalculated from model: {recalculated_flops if recalculated_flops is not None else 'N/A'}")
-                if recalculated_flops is not None:
-                    best_result.flops = recalculated_flops
-
+                try:
+                    recalculated_flops = _calculate_flops(exp_dir)
+                    print(f"  FLOPS recalculated from model: {recalculated_flops if recalculated_flops is not None else 'N/A'}")
+                    if recalculated_flops is not None:
+                        best_result.flops = recalculated_flops
+                except:
+                    best_result.flops = 0
             if any(value is None for value in [best_result.latency, best_result.hw_cost, best_result.hw_total_cost, best_result.hw_config]):
                 hw_metrics = _calculate_hardware(exp_dir)
                 if hw_metrics is not None:

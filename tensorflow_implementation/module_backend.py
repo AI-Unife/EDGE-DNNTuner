@@ -35,7 +35,7 @@ class ModuleBackend(BackendInterface):
         else:
             return 'other', {}  # unknown / ignored layers
         
-    def get_flops(self, model, input_shapes):
+    def get_flops(self, model, input_shapes=None):
         from tensorflow_implementation.flops.flops_calculator import analyze_model
         flops = analyze_model(model, input_shapes)[0].total_float_ops
         trainableParams = np.sum([np.prod(v.shape) for v in model.model.trainable_weights])
