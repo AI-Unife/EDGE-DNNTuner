@@ -1,0 +1,12 @@
+Individuare (dai RW) se c'è un TUNER pubblicato paragonabile (permette di specificare spazio di ricerca)
+
+
+DARTS BANANAS FLEXIBO ENAS
+
+
+CONDIZIONI: TUNER SU GITHUB E SPAZIO DI RICERCA MODIFICABILE
+
+(dopo quanti reti testate >> ore gpu)
+
+
+Lo spazio più grande è quello con self.cfg.opt = RS
