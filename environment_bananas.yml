@@ -1,0 +1,19 @@
+name: edge-dnntuner-bananas
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+      - tensorflow==2.15
+      - scikit-optimize>=0.10.2
+      - matplotlib>=3.9.0
+      - pytest>=8.3.4
+      - tonic>=1.5.0
+      - problog>=2.2.6
+      - tqdm==4.67.1
+      - PyYAML==6.0.3
+      - pandas==2.3.3
+      - datasets>=2.19.0
+      - huggingface-hub>=0.23.0
+      - pillow>=10.0.0

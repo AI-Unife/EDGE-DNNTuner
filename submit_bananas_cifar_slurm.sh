@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PYTHON_BIN="${PYTHON_BIN:-python}"
+CONDA_ENV="${CONDA_ENV:-edge-dnntuner-bananas}"
+PYTHON_BIN="${PYTHON_BIN:-conda run --no-capture-output -n ${CONDA_ENV} python}"
+JOB_SETUP="${JOB_SETUP:-}"
 PARTITION="${PARTITION:-gpu}"
 GPUS="${GPUS:-1}"
 TIME_LIMIT="${TIME_LIMIT:-24:00:00}"
@@ -23,6 +25,17 @@ mkdir -p "$RESULTS_DIR" "$SLURM_LOG_DIR"
 for DATA in "${DATASETS[@]}"; do
   for SEED in "${SEEDS[@]}"; do
     NAME_EXP="bananas_${DATA}_seed${SEED}"
+    RUN_CMD="${PYTHON_BIN} bananas_runner.py \
+        --name ${RESULTS_DIR}/${NAME_EXP} \
+        --dataset ${DATA} \
+        --seed ${SEED} \
+        --eval ${EVALS} \
+        --epochs ${EPOCHS} \
+        --mod_list flops_module"
+    if [[ -n "$JOB_SETUP" ]]; then
+      RUN_CMD="${JOB_SETUP} && ${RUN_CMD}"
+    fi
+
     sbatch \
       --job-name="bananas_${DATA}_${SEED}" \
       --partition="$PARTITION" \
@@ -30,12 +43,6 @@ for DATA in "${DATASETS[@]}"; do
       --time="$TIME_LIMIT" \
       --output="${SLURM_LOG_DIR}/%x_%j.out" \
       --error="${SLURM_LOG_DIR}/%x_%j.err" \
-      --wrap="${PYTHON_BIN} bananas_runner.py \
-        --name ${RESULTS_DIR}/${NAME_EXP} \
-        --dataset ${DATA} \
-        --seed ${SEED} \
-        --eval ${EVALS} \
-        --epochs ${EPOCHS} \
-        --mod_list flops_module"
+      --wrap="$RUN_CMD"
   done
 done
