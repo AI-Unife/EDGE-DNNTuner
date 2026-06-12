@@ -82,13 +82,14 @@ def analyze_model(initial_model, input_shapes=None):
 
     # Use provided input_shapes if available, otherwise infer from model
     if input_shapes is None:
-        specs = [tf.TensorSpec([1, *inputs.shape[1:]]) for inputs in initial_model.model.inputs]
+        print("[DEBUG] inital model  ", initial_model)
+        specs = [tf.TensorSpec([1, *inputs.shape[1:]]) for inputs in initial_model.inputs]
     else:
         specs = [tf.TensorSpec([1, *shape]) for shape in input_shapes]
     
     # Create concrete function with correct number of inputs
     if len(specs) == 1:
-        concrete = tf.function(lambda x: model.model(x), autograph=False)
+        concrete = tf.function(lambda x: model(x), autograph=False)
     else:
         # For multiple inputs (e.g., dual ROI inputs), pass as a list
         def call_model(*inputs):

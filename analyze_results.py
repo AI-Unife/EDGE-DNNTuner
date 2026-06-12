@@ -33,6 +33,7 @@ except ImportError:
 from tensorflow_implementation.flops.flops_calculator import analyze_model
 import nvdla.profiler as profiler
 from components.model_interface import LayerSpec, LayerTypes, Params
+from components.dataset import TunerDataset
 _EXCLUDED_CONFIG_KEYS = ["name", "verbose", "polarity", "created_at"]
 
 @dataclass
@@ -78,6 +79,7 @@ class ResultsAnalyzer:
         """
         # Load config.yaml file
         self._load_config_yaml()
+        print("[INFO] Analyzing results...")
         
         if not self.algorithm_logs_dir.exists():
             print(f"  algorithm_logs folder not found in {self.experiment_dir}")
@@ -97,7 +99,7 @@ class ResultsAnalyzer:
             print("  No score_report.txt file found, score will be recomputed from module logs when possible")
 
         # Load hyperparameters
-        # hyperparams_list = self._load_hyperparams()
+        hyperparams_list = self._load_hyperparams()
         
         # Load FLOPS data
         flops_data = self._load_flops_data()
@@ -108,7 +110,7 @@ class ResultsAnalyzer:
         hw_data = self._load_hardware_data()
         if hw_data:
             self.has_hardware_module = True
-        
+
         # Combine the data
         max_iterations = max(
             len(accuracies),
@@ -116,8 +118,37 @@ class ResultsAnalyzer:
             len(flops_data) if flops_data else 0,
             len(hw_data) if hw_data else 0
         )
-        
+        dataset_name = self.config.get("dataset", "unknown")
+        dataset = TunerDataset()
+
+        if dataset_name == "cifar10":
+            dataset.load_cifar_10()
+        elif dataset_name == "cifar100":
+            dataset.load_cifar_100()
+        elif dataset_name == "mnist":
+            dataset.load_mnist()
+        elif dataset_name == "cifar10_light" or dataset_name == "light_cifar" or dataset_name == "light":
+            dataset.load_light_cifar()
+        elif dataset_name == "gesture":
+            dataset.load_gesture()
+        elif "roigesture" in dataset_name:
+            dataset.load_roi_gesture()
+        elif dataset_name == "tinyimagenet":
+            dataset.load_tiny_imagenet()
+        elif dataset_name == "cca":
+            dataset.load_cca()
+        elif dataset_name == "cim":
+            dataset.load_cim()
+        else:
+            print(
+                f"Unknown dataset: {dataset_name}. Supported: cifar10, cifar100, mnist, light, gesture, roigesture_matrix, roigesture_coords, cca, cim.")
+            exit(1)
+
         for i in range(max_iterations):
+            if flops_data is None or flops_data[i][1] is None:
+                flops, nparams = _compute_net_flops(hyperparams_list[i], dataset)
+                flops_data[i] = (nparams, flops)
+                print(f"  Iteration {i+1}: FLOPS recalculated from hyperparameters: {flops if flops is not None else 'N/A'}, Nparams: {nparams if nparams is not None else 'N/A'}")
             result = ExperimentResult(
                 iteration=i + 1,
                 accuracy=accuracies[i] if i < len(accuracies) else None,
@@ -181,28 +212,83 @@ class ResultsAnalyzer:
             return []
         
         return scores
+
+
+
+    def _extract_layers_per_iteration(self, input_file):
+        import re
+        iteration_pattern = re.compile(r'START TRAINING ITERATION (\d+)')
+        layer_pattern = re.compile(r'layer_x_block=(\d+)')
+
+        results = {}
+        current_iter = None
+
+        with open(input_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                iter_match = iteration_pattern.search(line)
+                if iter_match:
+                    current_iter = int(iter_match.group(1))
+                    continue
+
+                if current_iter is not None:
+                    layer_match = layer_pattern.search(line)
+                    if layer_match:
+                        # prende sempre l'ULTIMO
+                        results[current_iter] = int(layer_match.group(1))
+
+        return results
+
+
+    def _get_out_file(self):
+        out_files = list(Path(self.experiment_dir).glob("*.out"))
+
+        if len(out_files) == 0:
+            raise FileNotFoundError("Nessun file .out trovato in {}".format(self.experiment_dir))
+        elif len(out_files) > 1:
+            raise ValueError(f"Più file .out trovati: {out_files}")
+
+        return str(out_files[0])
     
     def _load_hyperparams(self) -> List[Optional[Dict[str, Any]]]:
         """Load hyperparameters from hyper-neural.txt file"""
         hp_file = self.algorithm_logs_dir / "hyper-neural.txt"
+        import ast
         if not hp_file.exists():
+            print(f"  hyper-neural.txt file not found in {self.algorithm_logs_dir}")
             return []
-        
-        hyperparams = []
+
         try:
+            layers_map = self._extract_layers_per_iteration(self._get_out_file())
+
+            hyperparams = []
+            current_iter = 0
+
             with open(hp_file, 'r') as f:
                 for line in f:
                     line = line.strip()
+
                     if not line:
                         hyperparams.append(None)
+                        current_iter += 1
                         continue
+
                     try:
-                        # Parse Python dict
                         hp_dict = ast.literal_eval(line)
+
+                        # ✅ aggiungi layer_x_block
+                        layer = layers_map.get(current_iter, None)
+
+                        if hp_dict is not None:
+                            hp_dict["layer_x_block"] = layer
+
                         hyperparams.append(hp_dict)
+
                     except Exception as e:
                         print(f"  Error parsing hyperparameters: {e}")
                         hyperparams.append(None)
+
+                    current_iter += 1
+
         except Exception as e:
             print(f"  Error reading {hp_file}: {e}")
             return []
@@ -273,6 +359,7 @@ class ResultsAnalyzer:
         
         try:
             with open(config_file, 'r') as f:
+                os.environ["EXP_CONFIG"] = str(config_file.resolve())
                 self.config = yaml.safe_load(f) or {}
         except Exception as e:
             print(f"  Error reading config.yaml: {e}")
@@ -406,6 +493,23 @@ class ResultsAnalyzer:
             return float(opt_value - (accuracy * acc_w))
 
         return -accuracy
+def _compute_net_flops(hyperparams: Optional[Dict[str, Any]], dataset):
+    """Compute a rough FLOPS estimate from hyperparameters if possible."""
+
+    if not hyperparams:
+        return None, None
+
+    from tensorflow_implementation import module_backend, neural_network
+
+    nn_cls = neural_network.NeuralNetwork
+    backend_cls = module_backend.ModuleBackend
+    da = hyperparams.get("da", False)
+    reg = hyperparams.get("reg", False)
+    residual = hyperparams.get("residual", False)
+    nn = nn_cls(backend_cls(), dataset, da, reg, residual)
+    nn.build_network(hyperparams, hyperparams.get("layer_x_block", 2))
+
+    return float(nn.flops), nn.nparams
 
 def _calculate_flops(exp_dir: Path) -> Optional[float]:
     """Load the best model from exp_dir/Model/best-model.keras and compute FLOPs."""

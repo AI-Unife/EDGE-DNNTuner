@@ -188,25 +188,25 @@ class NeuralNetwork(BaseNeuralNetwork):
             )
         if self.exp_cfg.verbose > 1:
             self.model.model.summary()
-        if "flops_module" in self.exp_cfg.mod_list:
-            # Compute FLOPs (approximate; counts MACs as 2 FLOPs)
-            # Use same shape logic as build_network: shape[2:] for gesture fwdPass/hybrid data
-            if (self.exp_cfg.mode in ("fwdPass", "hybrid")) and "gesture" in self.exp_cfg.dataset:
-                data_shape = self.dataset.X_train.shape[2:]
-                if self.is_roi:
-                    pos_shape = self.dataset.pos_train.shape[2:]
-            else:
-                data_shape = self.dataset.X_train.shape[1:]
-                if self.is_roi:
-                    pos_shape = self.dataset.pos_train.shape[1:]
-            
+        # if "flops_module" in self.exp_cfg.mod_list:
+        # Compute FLOPs (approximate; counts MACs as 2 FLOPs)
+        # Use same shape logic as build_network: shape[2:] for gesture fwdPass/hybrid data
+        if (self.exp_cfg.mode in ("fwdPass", "hybrid")) and "gesture" in self.exp_cfg.dataset:
+            data_shape = self.dataset.X_train.shape[2:]
             if self.is_roi:
-                # For ROI: pass both data and pos input shapes
-                input_shapes = [data_shape, pos_shape]
-            else:
-                # For regular: pass only data input shape
-                input_shapes = [data_shape]
-            self.flops, self.nparams = self.backend.get_flops(self.model, input_shapes)
+                pos_shape = self.dataset.pos_train.shape[2:]
+        else:
+            data_shape = self.dataset.X_train.shape[1:]
+            if self.is_roi:
+                pos_shape = self.dataset.pos_train.shape[1:]
+
+        if self.is_roi:
+            # For ROI: pass both data and pos input shapes
+            input_shapes = [data_shape, pos_shape]
+        else:
+            # For regular: pass only data input shape
+            input_shapes = [data_shape]
+        self.flops, self.nparams = self.backend.get_flops(self.model.model, input_shapes)
         if "hardware_module" in self.exp_cfg.mod_list:
             # Compute total latency cost
             from modules.loss.hardware_module import hardware_module
