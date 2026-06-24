@@ -4,13 +4,15 @@ set -euo pipefail
 CONDA_ENV="${CONDA_ENV:-edge-dnntuner-bananas}"
 PYTHON_BIN="${PYTHON_BIN:-conda run --no-capture-output -n ${CONDA_ENV} python}"
 JOB_SETUP="${JOB_SETUP:-}"
-PARTITION="${PARTITION:-gpu}"
+# Valid GPU partitions on the UNIFE cluster: gpu_H100, gpu_H100_partitioned, gpu_L40S.
+PARTITION="${PARTITION:-gpu_L40S}"
 GPUS="${GPUS:-1}"
-TIME_LIMIT="${TIME_LIMIT:-24:00:00}"
+TIME_LIMIT="${TIME_LIMIT:-1-00:00:00}"
 EVALS="${EVALS:-1000}"
 EPOCHS="${EPOCHS:-100}"
 RESULTS_DIR="${RESULTS_DIR:-results_BANANAS}"
 SLURM_LOG_DIR="${SLURM_LOG_DIR:-slurm_logs}"
+HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${HOME}/.cache/huggingface/datasets}"
 
 DATASETS=(cifar10 cifar100)
 SEEDS=(42 123 96 7 84)
@@ -25,7 +27,7 @@ mkdir -p "$RESULTS_DIR" "$SLURM_LOG_DIR"
 for DATA in "${DATASETS[@]}"; do
   for SEED in "${SEEDS[@]}"; do
     NAME_EXP="bananas_${DATA}_seed${SEED}"
-    RUN_CMD="${PYTHON_BIN} bananas_runner.py \
+    RUN_CMD="export HF_DATASETS_CACHE=${HF_DATASETS_CACHE}; ${PYTHON_BIN} bananas_runner.py \
         --name ${RESULTS_DIR}/${NAME_EXP} \
         --dataset ${DATA} \
         --seed ${SEED} \

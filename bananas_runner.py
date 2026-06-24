@@ -93,9 +93,13 @@ def load_dataset(cfg):
     dataset_name = cfg.dataset.lower()
 
     if dataset_name == "cifar10":
-        dataset.load_cifar_10()
+        dataset.n_classes = 10
+        dataset.load_hf_dataset("uoft-cs/cifar10", image_key="img", label_key="label")
+        dataset.normalize_data()
     elif dataset_name == "cifar100":
-        dataset.load_cifar_100()
+        dataset.n_classes = 100
+        dataset.load_hf_dataset("uoft-cs/cifar100", image_key="img", label_key="fine_label")
+        dataset.normalize_data()
     elif dataset_name == "mnist":
         dataset.load_mnist()
     elif dataset_name in {"cifar10_light", "light_cifar", "light"}:
