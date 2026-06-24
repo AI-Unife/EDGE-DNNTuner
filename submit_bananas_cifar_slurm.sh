@@ -7,6 +7,7 @@ JOB_SETUP="${JOB_SETUP:-}"
 # Valid GPU partitions on the UNIFE cluster: gpu_H100, gpu_H100_partitioned, gpu_L40S.
 PARTITION="${PARTITION:-gpu_L40S}"
 GPUS="${GPUS:-1}"
+MEMORY="${MEMORY:-32G}"
 TIME_LIMIT="${TIME_LIMIT:-1-00:00:00}"
 EVALS="${EVALS:-1000}"
 EPOCHS="${EPOCHS:-100}"
@@ -42,6 +43,7 @@ for DATA in "${DATASETS[@]}"; do
       --job-name="bananas_${DATA}_${SEED}" \
       --partition="$PARTITION" \
       --gres="gpu:${GPUS}" \
+      --mem="$MEMORY" \
       --time="$TIME_LIMIT" \
       --output="${SLURM_LOG_DIR}/%x_%j.out" \
       --error="${SLURM_LOG_DIR}/%x_%j.err" \

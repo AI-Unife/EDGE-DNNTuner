@@ -5,7 +5,7 @@ dependencies:
   - python=3.10
   - pip
   - pip:
-      - tensorflow==2.15
+      - tensorflow[and-cuda]==2.15
       - scikit-optimize>=0.10.2
       - matplotlib>=3.9.0
       - pytest>=8.3.4
