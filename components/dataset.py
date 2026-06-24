@@ -203,6 +203,67 @@ class TunerDataset:
         self.Y_train = y_train
         self.Y_test = y_test
         self.normalize_data()
+        
+    def load_beans(self):
+        from PIL import Image
+        from io import BytesIO
+
+        dataset = self._load_hf_dataset_offline("AI-Lab-Makerere/beans")
+        train = dataset["train"]
+        test_split = "valid" if "valid" in dataset else "test"
+        test = dataset[test_split]
+
+        # Helper to extract the image regardless of the column format
+        def open_image_from_row(img_field):
+            # img_field can be bytes/bytearray or a dict with key "bytes"
+            if isinstance(img_field, (bytes, bytearray)):
+                data = img_field
+            elif isinstance(img_field, dict) and "bytes" in img_field:
+                data = img_field["bytes"]
+            else:
+                # In some datasets the image is already a PIL object (rare with parquet)
+                # or a path. Handle these cases as well.
+                if isinstance(img_field, Image.Image):
+                    return img_field.convert("RGB")
+                raise TypeError(f"Unrecognized image format: {type(img_field)}")
+            img = Image.open(BytesIO(data)).convert("RGB")
+            # Tiny-ImageNet is 64x64; ensure it in case resizing is needed
+            if img.size != (64, 64):
+                img = img.resize((64, 64))
+            return img
+
+        # Load into lists (faster than np.concatenate in a loop)
+        x_train_list, y_train_list = [], []
+        for img_field, label in zip(train["image"], train["labels"]):
+            img = open_image_from_row(img_field)
+            x_train_list.append(np.array(img))  # (64, 64, 3), dtype uint8
+            y_train_list.append(int(label))
+
+        x_test_list, y_test_list = [], []
+        for img_field, label in zip(test["image"], test["labels"]):
+            img = open_image_from_row(img_field)
+            x_test_list.append(np.array(img))
+            y_test_list.append(int(label))
+
+        # Convert to array; optional: normalization in [0,1]
+        x_train = np.stack(x_train_list)
+        x_test = np.stack(x_test_list)
+        y_train = np.array(y_train_list, dtype=np.int64)
+        y_test = np.array(y_test_list, dtype=np.int64)
+        
+        self.n_classes = len(np.unique(y_train))
+        self.X_train = x_train
+        self.X_test = x_test
+        self.Y_train = y_train
+        self.Y_test = y_test
+        self.normalize_data()
+        
+        print("Dataset beans\n")
+        print(f"\tShape IMG:{x_train[0].shape}")
+        print(f"\tX_train:{len(x_train)}")
+        print(f"\tY_train:{len(y_train)}")
+        print(f"\tX_test:{len(x_test)}")
+        print(f"\tY_test:{len(y_test)}")
 
     def load_gesture(self):
         """Load DVSGesture dataset using the specialized gesture_dataset module."""
@@ -297,6 +358,7 @@ class TunerDataset:
         self.Y_train = Y[train_idx]
         self.X_test  = X[test_idx]
         self.Y_test  = Y[test_idx]
+        self.normalize_data()
 
         print(self.X_train.shape[0], 'train samples')
         print(self.X_test.shape[0], 'test samples')

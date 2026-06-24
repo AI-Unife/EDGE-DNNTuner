@@ -28,7 +28,7 @@ def create_experiment_folders() -> None:
     # Use the 'cfg.name' Path object from the main script
     base_path = Path(cfg.name)
     required_dirs = [
-        "Model", "database", "log_folder",
+        "Model", "database",
         "algorithm_logs", "dashboard", "dashboard/model", "symbolic"
     ]
     
@@ -328,8 +328,10 @@ if __name__ == "__main__":
         dataset.load_cca()
     elif dataset_name == "cim":
         dataset.load_cim()
+    elif dataset_name == "beans":
+        dataset.load_beans()
     else:
-        print(f"Unknown dataset: {cfg.dataset}. Supported: cifar10, cifar100, mnist, light, gesture, roigesture_matrix, roigesture_coords, cca, cim.")
+        print(f"Unknown dataset: {cfg.dataset}. Supported: cifar10, cifar100, mnist, beans, light, gesture, roigesture_matrix, roigesture_coords, cca, cim.")
         exit(1)
 
     # --- 3. Controller and Space Setup ---
@@ -360,6 +362,9 @@ if __name__ == "__main__":
         ctrl=ctrl, 
         max_iter=cfg.eval
     )
+    
+    # Remove temo file in dashboard
+    shutil.rmtree(Path(cfg.name)/"dashboard")
     
     end_time = time.time()
     print(colors.OKGREEN, "\nALGORITHM FINISHED \n", colors.ENDC)

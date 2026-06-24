@@ -78,12 +78,15 @@ def analyze_model(initial_model, input_shapes=None):
     :param input_shapes: list of input shapes (optional, defaults to model.inputs)
     :return: number of total flops
     """
-    model = initial_model
+    if isinstance(initial_model, tf.keras.Model):
+        
+        model = initial_model
+    else:
+        model = initial_model.model
 
     # Use provided input_shapes if available, otherwise infer from model
     if input_shapes is None:
-        print("[DEBUG] inital model  ", initial_model)
-        specs = [tf.TensorSpec([1, *inputs.shape[1:]]) for inputs in initial_model.inputs]
+        specs = [tf.TensorSpec([1, *inputs.shape[1:]]) for inputs in model.inputs]
     else:
         specs = [tf.TensorSpec([1, *shape]) for shape in input_shapes]
     
@@ -93,7 +96,7 @@ def analyze_model(initial_model, input_shapes=None):
     else:
         # For multiple inputs (e.g., dual ROI inputs), pass as a list
         def call_model(*inputs):
-            return model.model(list(inputs))
+            return model(list(inputs))
         concrete = tf.function(call_model, autograph=False)
     
     concrete_func = concrete.get_concrete_function(*specs)

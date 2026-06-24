@@ -35,6 +35,8 @@ import nvdla.profiler as profiler
 from components.model_interface import LayerSpec, LayerTypes, Params
 from components.dataset import TunerDataset
 _EXCLUDED_CONFIG_KEYS = ["name", "verbose", "polarity", "created_at"]
+COMPUTE_FLOPS = False
+COMPUTE_HW = False
 
 @dataclass
 class ExperimentResult:
@@ -120,32 +122,32 @@ class ResultsAnalyzer:
         )
         dataset_name = self.config.get("dataset", "unknown")
         dataset = TunerDataset()
-
-        if dataset_name == "cifar10":
-            dataset.load_cifar_10()
-        elif dataset_name == "cifar100":
-            dataset.load_cifar_100()
-        elif dataset_name == "mnist":
-            dataset.load_mnist()
-        elif dataset_name == "cifar10_light" or dataset_name == "light_cifar" or dataset_name == "light":
-            dataset.load_light_cifar()
-        elif dataset_name == "gesture":
-            dataset.load_gesture()
-        elif "roigesture" in dataset_name:
-            dataset.load_roi_gesture()
-        elif dataset_name == "tinyimagenet":
-            dataset.load_tiny_imagenet()
-        elif dataset_name == "cca":
-            dataset.load_cca()
-        elif dataset_name == "cim":
-            dataset.load_cim()
-        else:
-            print(
-                f"Unknown dataset: {dataset_name}. Supported: cifar10, cifar100, mnist, light, gesture, roigesture_matrix, roigesture_coords, cca, cim.")
-            exit(1)
+        if COMPUTE_FLOPS and flops_data is None:
+            if dataset_name == "cifar10":
+                dataset.load_cifar_10()
+            elif dataset_name == "cifar100":
+                dataset.load_cifar_100()
+            elif dataset_name == "mnist":
+                dataset.load_mnist()
+            elif dataset_name == "cifar10_light" or dataset_name == "light_cifar" or dataset_name == "light":
+                dataset.load_light_cifar()
+            elif dataset_name == "gesture":
+                dataset.load_gesture()
+            elif "roigesture" in dataset_name:
+                dataset.load_roi_gesture()
+            elif dataset_name == "tinyimagenet":
+                dataset.load_tiny_imagenet()
+            elif dataset_name == "cca":
+                dataset.load_cca()
+            elif dataset_name == "cim":
+                dataset.load_cim()
+            else:
+                print(
+                    f"Unknown dataset: {dataset_name}. Supported: cifar10, cifar100, mnist, light, gesture, roigesture_matrix, roigesture_coords, cca, cim.")
+                exit(1)
 
         for i in range(max_iterations):
-            if flops_data is None or flops_data[i][1] is None:
+            if COMPUTE_FLOPS and (flops_data is None or flops_data[i][1] is None):
                 flops, nparams = _compute_net_flops(hyperparams_list[i], dataset)
                 flops_data[i] = (nparams, flops)
                 print(f"  Iteration {i+1}: FLOPS recalculated from hyperparameters: {flops if flops is not None else 'N/A'}, Nparams: {nparams if nparams is not None else 'N/A'}")
@@ -736,7 +738,7 @@ def analyze_all_experiments(parent_dir: Path, output_dir: Optional[Path] = None)
                         best_result.flops = recalculated_flops
                 except:
                     best_result.flops = 0
-            if any(value is None for value in [best_result.latency, best_result.hw_cost, best_result.hw_total_cost, best_result.hw_config]):
+            if COMPUTE_HW and (any(value is None for value in [best_result.latency, best_result.hw_cost, best_result.hw_total_cost, best_result.hw_config])):
                 hw_metrics = _calculate_hardware(exp_dir)
                 if hw_metrics is not None:
                     best_result.latency, best_result.hw_cost, best_result.hw_total_cost, best_result.hw_config = hw_metrics

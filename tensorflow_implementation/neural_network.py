@@ -252,8 +252,8 @@ class NeuralNetwork(BaseNeuralNetwork):
             pass  # ignore if incompatible
 
         # TensorBoard callback
-        tb_log_dir = f"{self.exp_cfg.name}/log_folder/logs/{model_name_id}"
-        tensorboard = TensorBoard(log_dir=tb_log_dir)
+        # tb_log_dir = f"{self.exp_cfg.name}/log_folder/logs/{model_name_id}"
+        # tensorboard = TensorBoard(log_dir=tb_log_dir)
 
         # --- Optimizer (safe construction, then wrap with LayerWiseLR) ---
         base_opt = _optimizer_from_name(params["optimizer"], float(params["learning_rate"]))
@@ -329,7 +329,7 @@ class NeuralNetwork(BaseNeuralNetwork):
                     X_train, self.dataset.Y_train,
                     X_test, self.dataset.Y_test,
                     self.epochs, params,
-                    [tensorboard, es]
+                    [es]
                 )
             else:
                 history = self.model.model.fit(
@@ -338,7 +338,7 @@ class NeuralNetwork(BaseNeuralNetwork):
                     batch_size=int(params["batch_size"]),
                     verbose=2,
                     validation_data=(X_test, self.dataset.Y_test),
-                    callbacks=[tensorboard, es],
+                    callbacks=[es],
                 ).history
             # --- Evaluate ---
             score = self.eval_model()

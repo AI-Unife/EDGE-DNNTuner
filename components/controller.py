@@ -42,7 +42,7 @@ class controller:
         # Internal counters
         self.count_new_fc = 0
         self.count_new_cv = 0
-        self.max_fc = 4
+        self.max_fc = 8
         self.start_conv = 2
         self.max_conv = self.count_max_conv(base_blocks=self.start_conv)
         self.count_no_probs = 0
@@ -324,7 +324,7 @@ class controller:
             print(f"[INFO] New Best Score: {self.score:.4f} (Previous: {self.best_score:.4f})")
             self.best_score = self.score
             self.best_iter = self.iter
-            self.nn.save_model() # Helper function call
+            # self.nn.save_model() # Helper function call
 
         # 7. Early Stopping Check
         if self.iter > self.best_iter + self.exp_cfg.early_stop:

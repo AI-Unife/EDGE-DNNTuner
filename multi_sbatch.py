@@ -1,10 +1,10 @@
 import subprocess
 from itertools import product
 
-datasets_cifar = ['tinyimagnet']
+datasets_cifar = ['beans']
 optimizers = ['filtered', 'RS_ruled', 'basic', 'standard', 'RS']
 seeds = [42, 123, 96, 7, 84]
-weights = [0.5, 0.7]  # Example weights for flops and latency in the combined score
+weights = [0.5]  # Example weights for flops and latency in the combined score
 
 
 def generate_jobs():
@@ -64,7 +64,7 @@ def generate_params_file(output_path: str = "params.txt"):
 
 def main():
     job_configs = generate_jobs()
-    save_job_configs_to_file(job_configs, "params_w_tiny.txt")
+    save_job_configs_to_file(job_configs, "params_beans.txt")
     # generate_params_file()
 
 if __name__ == "__main__":

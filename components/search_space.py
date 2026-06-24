@@ -36,14 +36,14 @@ class search_space:
         Define the base search space reflecting the backbone of the neural network.
         Returns the created `skopt.space.Space`.
         """
-
+        self.big_space = (self.cfg.opt in ['standard', 'RS']) or ("cim" in self.cfg.dataset)
         self.search_space = Space([
             Categorical(name='num_neurons', categories=[4, 8, 16, 32]),
             Integer(1, 4,  name='unit_c1'),
             Integer(1, 8, name='unit_c2'),
             Real(0.03, 0.5,  name='dr_f'),
             Real(1e-4, 1e-3, name='learning_rate'),
-            Categorical(categories=[8, 16, 32, 64, 128],  name='batch_size'),
+            Categorical(categories=[8, 16, 32, 64],  name='batch_size'),
             Categorical(['Adam', 'Adamax', 'SGD', 'Adagrad', 'Adadelta'], name='optimizer'),
             Categorical(['relu', 'elu', 'selu', 'swish'], name='activation'),
             Categorical(name='data_augmentation', categories=[False, True] if self.cfg.opt in ['standard', 'RS'] else [False]),
@@ -51,18 +51,22 @@ class search_space:
             Categorical(name="skip_connection", categories=[False, True] if self.cfg.opt in ['standard', 'RS'] else [False])
 
         ])
+        if self.big_space:
+            for d in range(1,3):
+                dense_name = f"fc_{d}"
+                self.search_space.dimensions.append(Integer(0, 32, name=dense_name))
         for b in range(1, max_block + 1):
             conv_name = f'new_conv_{b}'
-            # if self.cfg.opt in ['standard', 'RS']:
-            self.search_space.dimensions.append(Integer(0, 16, name=conv_name))
-            # else:
-            #     self.search_space.dimensions.append(Integer(-1, 0, name=conv_name))
+            if self.cfg.opt in ['standard', 'RS']:
+                self.search_space.dimensions.append(Integer(0, 16, name=conv_name))
+            else:
+                self.search_space.dimensions.append(Integer(-1, 0, name=conv_name))
         for d in range(1, max_dense + 1):
             dense_name = f'new_fc_{d}'
-            # if self.cfg.opt in ['standard', 'RS']:
-            self.search_space.dimensions.append(Integer(0, 32, name=dense_name))
-            # else:
-            #     self.search_space.dimensions.append(Integer(-1, 0, name=dense_name))
+            if self.cfg.opt in ['standard', 'RS']:
+                self.search_space.dimensions.append(Integer(0, 32, name=dense_name))
+            else:
+                self.search_space.dimensions.append(Integer(-1, 0, name=dense_name))
 
         return self.search_space
 

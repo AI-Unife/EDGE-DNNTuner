@@ -23,7 +23,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--dataset", type=str,
-        help="Hugging Face dataset name (e.g. mnist, cifar10, zh-plus/tiny-imagenet)",
+        help="Hugging Face dataset name (e.g. mnist, cifar10, zh-plus/tiny-imagenet, AI-Lab-Makerere/beans)",
     )
     parser.add_argument(
         "--config",

@@ -61,7 +61,8 @@ class TFModel(TunerModel):
         self.reg = params.get("reg_l2", False)
         self.da = params.get("data_augmentation", False)
 
-        batch = True if "tiny" in self.cfg.dataset.lower() else False  # self.reg if self.reg else None
+        print(f"\n\n{self.cfg.dataset.lower()}\n\n")
+        batch = True if "tiny" in self.cfg.dataset.lower() or "cim" in self.cfg.dataset.lower() else False  # self.reg if self.reg else None
         self.model = None
         # 2) Build a new CNN
 
@@ -86,7 +87,7 @@ class TFModel(TunerModel):
             x = Conv2D(params["unit_c1"] * params['num_neurons'], (3, 3), padding="same", kernel_regularizer=reg_layer)(x)
             x = Activation(params["activation"])(x)
             x = BatchNormalization()(x) if batch else x
-        # x = Dropout(params["dr_f"])(x)
+        x = Dropout(params["dr_f"])(x)
         x = MaxPooling2D(pool_size=(2, 2))(x)
 
         shortcut = x
@@ -122,10 +123,10 @@ class TFModel(TunerModel):
                 x = Activation(params["activation"])(x)
                 x = BatchNormalization()(x) if batch else x
             
-            # x = Dropout(params["dr_f"])(x)
+            x = Dropout(params["dr_f"])(x)
             x = MaxPooling2D(pool_size=(2, 2))(x)
 
-        x = GlobalAveragePooling2D()(x) #if batch else Flatten()(x)
+        x = GlobalAveragePooling2D()(x) if batch else Flatten()(x)
         
         # If ROI dataset, concatenate flattened pos with x
         pos_input = None
@@ -135,6 +136,11 @@ class TFModel(TunerModel):
             pos_flat = Flatten()(pos_input)
             x = tf.keras.layers.Concatenate()([x, pos_flat])
         
+        added_fcs = [k for k in params if re.match(r"fc_\d+$", k) and params[k] > 0]
+        for layer_key in sorted(added_fcs, key=lambda s: int(s.split("_")[-1])):  # stable order
+            x = Dense(params[layer_key] * params['num_neurons'], kernel_regularizer=reg_layer)(x)
+            x = Activation(params["activation"])(x)
+            x = Dropout(params["dr_f"])(x)
 
         # Dynamically added FC layers
         added_fcs = [k for k in params if re.match(r"new_fc_\d+$", k) and params[k] > 0]
