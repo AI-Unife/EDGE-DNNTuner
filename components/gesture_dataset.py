@@ -451,7 +451,7 @@ def get_ROI_numpy(cfg):
         ((x_train, y_train), (x_test, y_test))
     """
     dataset_path = "rois_and_coordinates/datasets/"
-    frame_size = 16
+    frame_size = 32
     cache_dir = f"./cache/DVS_ROI_reshaped_{frame_size}_{cfg.mode}_{cfg.frames}_{cfg.channels}/"
     output_size = (frame_size, frame_size, 2)
     _ensure_cache_dir(cache_dir)

@@ -324,7 +324,8 @@ class controller:
             print(f"[INFO] New Best Score: {self.score:.4f} (Previous: {self.best_score:.4f})")
             self.best_score = self.score
             self.best_iter = self.iter
-            # self.nn.save_model() # Helper function call
+            if "gesture" in self.exp_cfg.dataset:
+                self.nn.save_model() # Helper function call
 
         # 7. Early Stopping Check
         if self.iter > self.best_iter + self.exp_cfg.early_stop:
