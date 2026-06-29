@@ -5,7 +5,19 @@ dependencies:
   - python=3.10
   - pip
   - pip:
-      - tensorflow[and-cuda]==2.15
+      - tensorflow==2.15
+      - nvidia-cublas-cu12==12.2.5.6
+      - nvidia-cuda-cupti-cu12==12.2.142
+      - nvidia-cuda-nvcc-cu12==12.2.140
+      - nvidia-cuda-nvrtc-cu12==12.2.140
+      - nvidia-cuda-runtime-cu12==12.2.140
+      - nvidia-cudnn-cu12==8.9.4.25
+      - nvidia-cufft-cu12==11.0.8.103
+      - nvidia-curand-cu12==10.3.3.141
+      - nvidia-cusolver-cu12==11.5.2.141
+      - nvidia-cusparse-cu12==12.1.2.141
+      - nvidia-nccl-cu12==2.16.5
+      - nvidia-nvjitlink-cu12==12.2.140
       - scikit-optimize>=0.10.2
       - matplotlib>=3.9.0
       - pytest>=8.3.4

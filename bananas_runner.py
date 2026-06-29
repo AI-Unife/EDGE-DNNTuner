@@ -57,6 +57,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ensemble_size", type=int, default=5, help="Number of neural predictors")
     parser.add_argument("--predictor_epochs", type=int, default=80, help="Training epochs for each predictor")
     parser.add_argument("--acq_beta", type=float, default=0.5, help="Exploration weight in LCB acquisition")
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume from algorithm_logs/bananas_history.csv if it exists.",
+    )
+    parser.add_argument(
+        "--max_new_evals",
+        type=int,
+        default=None,
+        help="Maximum number of new architectures to evaluate in this process. Useful for Slurm chunks.",
+    )
     return parser.parse_args()
 
 
@@ -309,6 +320,49 @@ def append_history(log_path: Path, row: Dict[str, Any]) -> None:
         writer.writerow(row)
 
 
+def value_from_history(dim: Any, raw_value: Any) -> Any:
+    if isinstance(dim, Categorical):
+        for category in dim.categories:
+            if normalize_for_key(category) == raw_value:
+                return category
+        raise ValueError(f"History value {raw_value!r} is not valid for categorical dimension {dim.name!r}.")
+    if isinstance(dim, Integer):
+        return int(raw_value)
+    if isinstance(dim, Real):
+        return float(raw_value)
+    raise TypeError(f"Unsupported skopt dimension type: {type(dim)}")
+
+
+def point_from_params_json(space: Space, params_json: str) -> List[Any]:
+    params = json.loads(params_json)
+    if not isinstance(params, dict):
+        raise ValueError("History params_json must decode to a JSON object.")
+
+    point: List[Any] = []
+    for dim in space.dimensions:
+        if dim.name is None:
+            raise ValueError("Cannot resume: all search-space dimensions must have a name.")
+        if dim.name not in params:
+            raise ValueError(f"Cannot resume: missing dimension {dim.name!r} in history row.")
+        point.append(value_from_history(dim, params[dim.name]))
+    return point
+
+
+def load_history(log_path: Path, space: Space, optimizer: BananasOptimizer) -> int:
+    if not log_path.exists():
+        return 0
+
+    loaded = 0
+    with log_path.open(newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            point = point_from_params_json(space, row["params_json"])
+            score = float(row["score"])
+            optimizer.tell(point, score)
+            loaded += 1
+    return loaded
+
+
 def main() -> None:
     args = parse_args()
     random.seed(args.seed)
@@ -352,8 +406,28 @@ def main() -> None:
     start_time = time.time()
     best_score = float("inf")
     history_path = Path(cfg.name) / "algorithm_logs" / "bananas_history.csv"
+    completed_evals = 0
 
-    for iteration in range(1, args.eval + 1):
+    if args.resume:
+        completed_evals = load_history(history_path, base_space, optimizer)
+        if completed_evals:
+            best_score = min(optimizer.scores)
+            print(f"[INFO] Resumed {completed_evals} previous BANANAS evaluations from {history_path}.")
+        else:
+            print("[INFO] Resume requested, but no previous BANANAS history was found. Starting fresh.")
+
+    target_eval = args.eval
+    if args.max_new_evals is not None:
+        if args.max_new_evals < 1:
+            raise ValueError("--max_new_evals must be >= 1 when provided.")
+        target_eval = min(args.eval, completed_evals + args.max_new_evals)
+
+    if completed_evals >= args.eval:
+        print(f"[INFO] Requested eval budget already reached: {completed_evals} / {args.eval}.")
+        print(f"HISTORY -----------> {history_path}")
+        return
+
+    for iteration in range(completed_evals + 1, target_eval + 1):
         if ctrl.convergence:
             print("[INFO] Controller early stopping triggered.")
             break
