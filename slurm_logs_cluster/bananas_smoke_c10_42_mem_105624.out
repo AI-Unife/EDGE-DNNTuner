@@ -1,0 +1,141 @@
+[exp_config] Created config.yaml at: /hpc/home/fresca/EDGE-DNNTuner/results_BANANAS/smoke_cifar10_seed42_mem/config.yaml
+50000 train samples
+10000 test samples
+Initialized NeuralNetwork with dataset. ROI mode: False
+FLOPS module weight: 0.3
+
+STARTING BANANAS BASELINE
+
+
+--- BANANAS ITERATION 1 / 5 ---
+Chosen point: {'num_neurons': 8, 'unit_c1': 1, 'unit_c2': 7, 'dr_f': 0.3740371526513604, 'learning_rate': 0.000638792635777333, 'batch_size': 8, 'optimizer': 'Adam', 'activation': 'relu', 'data_augmentation': True, 'reg_l2': True, 'skip_connection': True, 'new_fc_1': 21, 'new_fc_2': 1, 'new_fc_3': 23, 'new_fc_4': 29, 'new_fc_5': 1, 'new_fc_6': 20, 'new_fc_7': 32, 'new_fc_8': 11, 'new_fc_9': 21, 'new_fc_10': 24}
+[94m
+|  --> START TRAINING ITERATION 0[0m
+[INFO] Flags -> DA: True, L2: True, Skip: True
+Building model with input_shape=(32, 32, 3), pos_input_shape=None, layer_x_block=2
+Epoch 1/2
+6250/6250 - 75s - loss: 2.4134 - accuracy: 0.0972 - val_loss: 2.3026 - val_accuracy: 0.1000 - 75s/epoch - 12ms/step
+Epoch 2/2
+6250/6250 - 72s - loss: 2.3029 - accuracy: 0.0986 - val_loss: 2.3026 - val_accuracy: 0.1000 - 72s/epoch - 11ms/step
+313/313 - 3s - loss: 2.3026 - accuracy: 0.1000 - 3s/epoch - 10ms/step
+
+ACCURACY: 0.10000000149011612
+
+
+SCORE: -0.32988764104308127
+
+[92m | MODULE VALUES ---------------------------------------------  |
+ [0m
+FLOPS: 20056180
+PARAMS: 798386.0
+[92m 
+ | -----------------------------------------------------------  |
+ [0m
+[INFO] New Best Score: -0.3299 (Previous: 10000000000.0000)
+
+--- BANANAS ITERATION 2 / 5 ---
+Chosen point: {'num_neurons': 8, 'unit_c1': 3, 'unit_c2': 7, 'dr_f': 0.09556211450645967, 'learning_rate': 0.00036293018368169634, 'batch_size': 16, 'optimizer': 'SGD', 'activation': 'swish', 'data_augmentation': False, 'reg_l2': True, 'skip_connection': True, 'new_fc_1': 2, 'new_fc_2': 6, 'new_fc_3': 20, 'new_fc_4': 8, 'new_fc_5': 17, 'new_fc_6': 3, 'new_fc_7': 24, 'new_fc_8': 13, 'new_fc_9': 8, 'new_fc_10': 25}
+[94m
+|  --> START TRAINING ITERATION 1[0m
+[INFO] Flags -> DA: False, L2: True, Skip: True
+Building model with input_shape=(32, 32, 3), pos_input_shape=None, layer_x_block=2
+Epoch 1/2
+3125/3125 - 84s - loss: 10.6193 - accuracy: 0.0963 - val_loss: 10.4531 - val_accuracy: 0.1000 - 84s/epoch - 27ms/step
+Epoch 2/2
+3125/3125 - 82s - loss: 10.2919 - accuracy: 0.0966 - val_loss: 10.1328 - val_accuracy: 0.1000 - 82s/epoch - 26ms/step
+313/313 - 5s - loss: 10.1328 - accuracy: 0.1000 - 5s/epoch - 16ms/step
+
+ACCURACY: 0.10000000149011612
+
+
+SCORE: -0.3019105690430813
+
+[92m | MODULE VALUES ---------------------------------------------  |
+ [0m
+FLOPS: 34044716
+PARAMS: 182858.0
+[92m 
+ | -----------------------------------------------------------  |
+ [0m
+
+--- BANANAS ITERATION 3 / 5 ---
+Chosen point: {'num_neurons': 4, 'unit_c1': 4, 'unit_c2': 4, 'dr_f': 0.23687167205761261, 'learning_rate': 0.00020983441136030096, 'batch_size': 16, 'optimizer': 'Adam', 'activation': 'swish', 'data_augmentation': False, 'reg_l2': True, 'skip_connection': False, 'new_fc_1': 5, 'new_fc_2': 3, 'new_fc_3': 28, 'new_fc_4': 17, 'new_fc_5': 25, 'new_fc_6': 9, 'new_fc_7': 13, 'new_fc_8': 30, 'new_fc_9': 14, 'new_fc_10': 7}
+[94m
+|  --> START TRAINING ITERATION 2[0m
+[INFO] Flags -> DA: False, L2: True, Skip: False
+Building model with input_shape=(32, 32, 3), pos_input_shape=None, layer_x_block=2
+Epoch 1/2
+3125/3125 - 30s - loss: 2.8399 - accuracy: 0.0971 - val_loss: 2.3028 - val_accuracy: 0.1000 - 30s/epoch - 10ms/step
+Epoch 2/2
+3125/3125 - 28s - loss: 2.3027 - accuracy: 0.0956 - val_loss: 2.3026 - val_accuracy: 0.1000 - 28s/epoch - 9ms/step
+313/313 - 2s - loss: 2.3026 - accuracy: 0.1000 - 2s/epoch - 6ms/step
+
+ACCURACY: 0.10000000149011612
+
+
+SCORE: -0.3535572490430813
+
+[92m | MODULE VALUES ---------------------------------------------  |
+ [0m
+FLOPS: 8221376
+PARAMS: 64782.0
+[92m 
+ | -----------------------------------------------------------  |
+ [0m
+[INFO] New Best Score: -0.3536 (Previous: -0.3299)
+
+--- BANANAS ITERATION 4 / 5 ---
+Chosen point: {'num_neurons': 16, 'unit_c1': 4, 'unit_c2': 1, 'dr_f': 0.48175085144419416, 'learning_rate': 0.0008600804638103364, 'batch_size': 32, 'optimizer': 'SGD', 'activation': 'selu', 'data_augmentation': True, 'reg_l2': True, 'skip_connection': False, 'new_fc_1': 28, 'new_fc_2': 14, 'new_fc_3': 0, 'new_fc_4': 24, 'new_fc_5': 6, 'new_fc_6': 8, 'new_fc_7': 23, 'new_fc_8': 0, 'new_fc_9': 7, 'new_fc_10': 23}
+[94m
+|  --> START TRAINING ITERATION 3[0m
+[INFO] Flags -> DA: True, L2: True, Skip: False
+Building model with input_shape=(32, 32, 3), pos_input_shape=None, layer_x_block=2
+Epoch 1/2
+1563/1563 - 144s - loss: 24.2433 - accuracy: 0.1019 - val_loss: 22.1570 - val_accuracy: 0.1823 - 144s/epoch - 92ms/step
+Epoch 2/2
+1563/1563 - 144s - loss: 22.0406 - accuracy: 0.1093 - val_loss: 20.9490 - val_accuracy: 0.2090 - 144s/epoch - 92ms/step
+313/313 - 9s - loss: 20.9490 - accuracy: 0.2090 - 9s/epoch - 28ms/step
+
+ACCURACY: 0.20900000631809235
+
+
+SCORE: -0.2726985724226646
+
+[92m | MODULE VALUES ---------------------------------------------  |
+ [0m
+FLOPS: 86800716
+PARAMS: 879898.0
+[92m 
+ | -----------------------------------------------------------  |
+ [0m
+
+--- BANANAS ITERATION 5 / 5 ---
+Chosen point: {'num_neurons': 4, 'unit_c1': 3, 'unit_c2': 1, 'dr_f': 0.36433071779186554, 'learning_rate': 0.0008111579864780852, 'batch_size': 32, 'optimizer': 'Adadelta', 'activation': 'selu', 'data_augmentation': True, 'reg_l2': True, 'skip_connection': False, 'new_fc_1': 32, 'new_fc_2': 22, 'new_fc_3': 23, 'new_fc_4': 21, 'new_fc_5': 26, 'new_fc_6': 0, 'new_fc_7': 13, 'new_fc_8': 2, 'new_fc_9': 0, 'new_fc_10': 4}
+[94m
+|  --> START TRAINING ITERATION 4[0m
+[INFO] Flags -> DA: True, L2: True, Skip: False
+Building model with input_shape=(32, 32, 3), pos_input_shape=None, layer_x_block=2
+Epoch 1/2
+1563/1563 - 17s - loss: 10.5168 - accuracy: 0.0994 - val_loss: 9.3707 - val_accuracy: 0.0823 - 17s/epoch - 11ms/step
+Epoch 2/2
+1563/1563 - 16s - loss: 10.4036 - accuracy: 0.0999 - val_loss: 9.2716 - val_accuracy: 0.0885 - 16s/epoch - 10ms/step
+313/313 - 1s - loss: 9.2716 - accuracy: 0.0885 - 1s/epoch - 4ms/step
+
+ACCURACY: 0.0885000005364418
+
+
+SCORE: -0.35434470437550925
+
+[92m | MODULE VALUES ---------------------------------------------  |
+ [0m
+FLOPS: 3802648
+PARAMS: 77514.0
+[92m 
+ | -----------------------------------------------------------  |
+ [0m
+[INFO] New Best Score: -0.3543 (Previous: -0.3536)
+
+BANANAS BASELINE FINISHED
+TOTAL TIME --------> 877.97 seconds
+BEST SCORE --------> -0.35434470437550925
+HISTORY -----------> results_BANANAS/smoke_cifar10_seed42_mem/algorithm_logs/bananas_history.csv

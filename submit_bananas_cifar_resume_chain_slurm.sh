@@ -18,6 +18,7 @@ TIME_LIMIT="${TIME_LIMIT:-04:00:00}"
 TOTAL_EVALS="${TOTAL_EVALS:-1000}"
 CHUNK_EVALS="${CHUNK_EVALS:-50}"
 EPOCHS="${EPOCHS:-100}"
+MAX_PARALLEL="${MAX_PARALLEL:-2}"
 
 RESULTS_DIR="${RESULTS_DIR:-results_BANANAS_resume}"
 SLURM_LOG_DIR="${SLURM_LOG_DIR:-slurm_logs}"
@@ -64,14 +65,54 @@ if (( CHUNK_EVALS < 1 )); then
 fi
 
 CHUNKS=$(((TOTAL_EVALS + CHUNK_EVALS - 1) / CHUNK_EVALS))
+TASK_COUNT=$((${#DATASETS[@]} * ${#SEEDS[@]}))
+
+if (( TASK_COUNT == 0 )); then
+  echo "Error: empty DATASETS_LIST or SEEDS_LIST." >&2
+  exit 1
+fi
+
+if [[ "${BANANAS_CHAIN_WORKER:-0}" == "1" ]]; then
+  TASK_ID="${SLURM_ARRAY_TASK_ID:?SLURM_ARRAY_TASK_ID is required in worker mode}"
+  CHUNK="${BANANAS_CHAIN_CHUNK:?BANANAS_CHAIN_CHUNK is required in worker mode}"
+  DATASET_INDEX=$((TASK_ID / ${#SEEDS[@]}))
+  SEED_INDEX=$((TASK_ID % ${#SEEDS[@]}))
+
+  DATA="${DATASETS[$DATASET_INDEX]}"
+  SEED="${SEEDS[$SEED_INDEX]}"
+  NAME_EXP="bananas_${DATA}_seed${SEED}_e${TOTAL_EVALS}_ep${EPOCHS}"
+
+  echo "Running BANANAS resume chunk ${CHUNK}/${CHUNKS}"
+  echo "Array task ${TASK_ID}/${TASK_COUNT}: dataset=${DATA}, seed=${SEED}"
+  echo "Budget: total_evals=${TOTAL_EVALS}, chunk_evals=${CHUNK_EVALS}, epochs=${EPOCHS}"
+  echo "Result dir=${RESULTS_DIR}/${NAME_EXP}"
+
+  export HF_DATASETS_CACHE
+
+  if [[ -n "$JOB_SETUP" ]]; then
+    eval "$JOB_SETUP"
+  fi
+
+  ${PYTHON_BIN} bananas_runner.py \
+    --name "${RESULTS_DIR}/${NAME_EXP}" \
+    --dataset "$DATA" \
+    --seed "$SEED" \
+    --eval "$TOTAL_EVALS" \
+    --epochs "$EPOCHS" \
+    --mod_list flops_module \
+    --resume \
+    --max_new_evals "$CHUNK_EVALS"
+  exit 0
+fi
 
 base_sbatch_args=(
   --partition="$PARTITION"
+  --array="0-$((TASK_COUNT - 1))%${MAX_PARALLEL}"
   --gres="gpu:${GPUS}"
   --mem="$MEMORY"
   --time="$TIME_LIMIT"
-  --output="${SLURM_LOG_DIR}/%x_%j.out"
-  --error="${SLURM_LOG_DIR}/%x_%j.err"
+  --output="${SLURM_LOG_DIR}/%x_%A_%a.out"
+  --error="${SLURM_LOG_DIR}/%x_%A_%a.err"
 )
 if [[ -n "$QOS" ]]; then
   base_sbatch_args+=(--qos="$QOS")
@@ -82,38 +123,27 @@ echo "Datasets: ${DATASETS[*]}"
 echo "Seeds: ${SEEDS[*]}"
 echo "Budget per run: total_evals=${TOTAL_EVALS}, chunk_evals=${CHUNK_EVALS}, epochs=${EPOCHS}"
 echo "Chunks per dataset/seed: ${CHUNKS}"
+echo "Array tasks per chunk: ${TASK_COUNT}, max parallel tasks per chunk: ${MAX_PARALLEL}"
 
-for DATA in "${DATASETS[@]}"; do
-  for SEED in "${SEEDS[@]}"; do
-    NAME_EXP="bananas_${DATA}_seed${SEED}_e${TOTAL_EVALS}_ep${EPOCHS}"
-    previous_job=""
+DATASETS_LIST="${DATASETS[*]}"
+SEEDS_LIST="${SEEDS[*]}"
+export CONDA_ENV PYTHON_BIN JOB_SETUP PARTITION GPUS MEMORY QOS TIME_LIMIT
+export TOTAL_EVALS CHUNK_EVALS EPOCHS MAX_PARALLEL RESULTS_DIR SLURM_LOG_DIR HF_DATASETS_CACHE
+export DATASETS_LIST SEEDS_LIST
 
-    for CHUNK in $(seq 1 "$CHUNKS"); do
-      RUN_CMD="export HF_DATASETS_CACHE=${HF_DATASETS_CACHE}; ${PYTHON_BIN} bananas_runner.py \
-        --name ${RESULTS_DIR}/${NAME_EXP} \
-        --dataset ${DATA} \
-        --seed ${SEED} \
-        --eval ${TOTAL_EVALS} \
-        --epochs ${EPOCHS} \
-        --mod_list flops_module \
-        --resume \
-        --max_new_evals ${CHUNK_EVALS}"
+SCRIPT_PATH="$0"
+previous_array_job=""
+for CHUNK in $(seq 1 "$CHUNKS"); do
+  sbatch_args=(
+    "${base_sbatch_args[@]}"
+    --job-name="bananas_c${CHUNK}"
+    --export="ALL,BANANAS_CHAIN_WORKER=1,BANANAS_CHAIN_CHUNK=${CHUNK}"
+  )
+  if [[ -n "$previous_array_job" ]]; then
+    sbatch_args+=(--dependency="afterok:${previous_array_job}")
+  fi
 
-      if [[ -n "$JOB_SETUP" ]]; then
-        RUN_CMD="${JOB_SETUP} && ${RUN_CMD}"
-      fi
-
-      sbatch_args=(
-        "${base_sbatch_args[@]}"
-        --job-name="bananas_${DATA}_${SEED}_c${CHUNK}"
-      )
-      if [[ -n "$previous_job" ]]; then
-        sbatch_args+=(--dependency="afterok:${previous_job}")
-      fi
-
-      job_id=$(sbatch --parsable "${sbatch_args[@]}" --wrap="$RUN_CMD")
-      echo "Submitted ${NAME_EXP} chunk ${CHUNK}/${CHUNKS}: job ${job_id}"
-      previous_job="$job_id"
-    done
-  done
+  job_id=$(sbatch --parsable "${sbatch_args[@]}" "$SCRIPT_PATH")
+  echo "Submitted chunk ${CHUNK}/${CHUNKS} as array job ${job_id}"
+  previous_array_job="$job_id"
 done

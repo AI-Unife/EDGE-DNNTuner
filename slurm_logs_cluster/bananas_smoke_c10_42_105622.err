@@ -1,0 +1,30 @@
+Traceback (most recent call last):
+  File "/hpc/home/fresca/EDGE-DNNTuner/components/dataset.py", line 94, in _load_hf_dataset_offline
+    return load_dataset(name, **kwargs)
+  File "/hpc/home/fresca/.conda/envs/edge-dnntuner-bananas/lib/python3.10/site-packages/datasets/load.py", line 1698, in load_dataset
+    builder_instance = load_dataset_builder(
+  File "/hpc/home/fresca/.conda/envs/edge-dnntuner-bananas/lib/python3.10/site-packages/datasets/load.py", line 1325, in load_dataset_builder
+    dataset_module = dataset_module_factory(
+  File "/hpc/home/fresca/.conda/envs/edge-dnntuner-bananas/lib/python3.10/site-packages/datasets/load.py", line 1217, in dataset_module_factory
+    raise e1 from None
+  File "/hpc/home/fresca/.conda/envs/edge-dnntuner-bananas/lib/python3.10/site-packages/datasets/load.py", line 1159, in dataset_module_factory
+    raise ConnectionError(f"Couldn't reach '{path}' on the Hub ({e.__class__.__name__})") from e
+ConnectionError: Couldn't reach 'cifar10' on the Hub (OfflineModeIsEnabled)
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/hpc/home/fresca/EDGE-DNNTuner/bananas_runner.py", line 383, in <module>
+    main()
+  File "/hpc/home/fresca/EDGE-DNNTuner/bananas_runner.py", line 326, in main
+    dataset = load_dataset(cfg)
+  File "/hpc/home/fresca/EDGE-DNNTuner/bananas_runner.py", line 96, in load_dataset
+    dataset.load_cifar_10()
+  File "/hpc/home/fresca/EDGE-DNNTuner/components/dataset.py", line 126, in load_cifar_10
+    self.load_hf_dataset("cifar10", image_key="img", label_key="label")
+  File "/hpc/home/fresca/EDGE-DNNTuner/components/dataset.py", line 103, in load_hf_dataset
+    dataset = self._load_hf_dataset_offline(name)
+  File "/hpc/home/fresca/EDGE-DNNTuner/components/dataset.py", line 96, in _load_hf_dataset_offline
+    raise RuntimeError(
+RuntimeError: Hugging Face dataset 'cifar10' not found in /hpc/home/fresca/.cache/huggingface/datasets. Make sure it is available in the local cache (HF_DATASETS_CACHE) or pre-downloaded on a node with Internet access.
+ERROR conda.cli.main_run:execute(124): `conda run python bananas_runner.py --name results_BANANAS/smoke_cifar10_seed42 --dataset cifar10 --seed 42 --eval 5 --epochs 2 --mod_list flops_module` failed. (See above for error)
