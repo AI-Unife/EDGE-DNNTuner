@@ -13,18 +13,14 @@ PARTITION="${PARTITION:-gpu_H100_partitioned}"
 GPUS="${GPUS:-1}"
 MEMORY="${MEMORY:-64G}"
 QOS="${QOS:-}"
-TIME_LIMIT="${TIME_LIMIT:-04:00:00}"
+TIME_LIMIT="${TIME_LIMIT:-08:00:00}"
 
 TOTAL_EVALS="${TOTAL_EVALS:-1000}"
-CHUNK_EVALS="${CHUNK_EVALS:-50}"
+CHUNK_EVALS="${CHUNK_EVALS:-25}"
 EPOCHS="${EPOCHS:-100}"
-MAX_PARALLEL="${MAX_PARALLEL:-2}"
-# aftercorr lets array task N in chunk K+1 start as soon as array task N in
-# chunk K succeeds. Use afterok to make each chunk wait for the whole previous
-# array.
-DEPENDENCY_TYPE="${DEPENDENCY_TYPE:-aftercorr}"
+MAX_PARALLEL="${MAX_PARALLEL:-10}"
 
-RESULTS_DIR="${RESULTS_DIR:-results_BANANAS_resume}"
+RESULTS_DIR="${RESULTS_DIR:-results_BANANAS_rolling}"
 SLURM_LOG_DIR="${SLURM_LOG_DIR:-slurm_logs}"
 HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${HOME}/.cache/huggingface/datasets}"
 
@@ -56,6 +52,21 @@ validate_partitions() {
   done
 }
 
+history_count() {
+  local history_path="$1"
+  if [[ ! -f "$history_path" ]]; then
+    echo 0
+    return
+  fi
+  local lines
+  lines=$(wc -l < "$history_path")
+  if (( lines <= 1 )); then
+    echo 0
+  else
+    echo $((lines - 1))
+  fi
+}
+
 validate_partitions
 mkdir -p "$RESULTS_DIR" "$SLURM_LOG_DIR"
 
@@ -67,37 +78,38 @@ if (( CHUNK_EVALS < 1 )); then
   echo "Error: CHUNK_EVALS must be >= 1." >&2
   exit 1
 fi
-case "$DEPENDENCY_TYPE" in
-  aftercorr|afterok)
-    ;;
-  *)
-    echo "Error: DEPENDENCY_TYPE must be aftercorr or afterok." >&2
-    exit 1
-    ;;
-esac
 
-CHUNKS=$(((TOTAL_EVALS + CHUNK_EVALS - 1) / CHUNK_EVALS))
 TASK_COUNT=$((${#DATASETS[@]} * ${#SEEDS[@]}))
-
 if (( TASK_COUNT == 0 )); then
   echo "Error: empty DATASETS_LIST or SEEDS_LIST." >&2
   exit 1
 fi
 
-if [[ "${BANANAS_CHAIN_WORKER:-0}" == "1" ]]; then
+CHUNKS=$(((TOTAL_EVALS + CHUNK_EVALS - 1) / CHUNK_EVALS))
+
+if [[ "${BANANAS_ROLLING_WORKER:-0}" == "1" ]]; then
   TASK_ID="${SLURM_ARRAY_TASK_ID:?SLURM_ARRAY_TASK_ID is required in worker mode}"
-  CHUNK="${BANANAS_CHAIN_CHUNK:?BANANAS_CHAIN_CHUNK is required in worker mode}"
+  CHUNK="${BANANAS_ROLLING_CHUNK:?BANANAS_ROLLING_CHUNK is required in worker mode}"
+
   DATASET_INDEX=$((TASK_ID / ${#SEEDS[@]}))
   SEED_INDEX=$((TASK_ID % ${#SEEDS[@]}))
 
   DATA="${DATASETS[$DATASET_INDEX]}"
   SEED="${SEEDS[$SEED_INDEX]}"
   NAME_EXP="bananas_${DATA}_seed${SEED}_e${TOTAL_EVALS}_ep${EPOCHS}"
+  HISTORY_PATH="${RESULTS_DIR}/${NAME_EXP}/algorithm_logs/bananas_history.csv"
+  COMPLETED_BEFORE=$(history_count "$HISTORY_PATH")
 
-  echo "Running BANANAS resume chunk ${CHUNK}/${CHUNKS}"
+  echo "Running rolling chunk ${CHUNK}/${CHUNKS}"
   echo "Array task ${TASK_ID}/${TASK_COUNT}: dataset=${DATA}, seed=${SEED}"
-  echo "Budget: total_evals=${TOTAL_EVALS}, chunk_evals=${CHUNK_EVALS}, epochs=${EPOCHS}"
+  echo "Completed before chunk: ${COMPLETED_BEFORE}/${TOTAL_EVALS}"
+  echo "Budget: chunk_evals=${CHUNK_EVALS}, epochs=${EPOCHS}"
   echo "Result dir=${RESULTS_DIR}/${NAME_EXP}"
+
+  if (( COMPLETED_BEFORE >= TOTAL_EVALS )); then
+    echo "Run already complete. Nothing to do."
+    exit 0
+  fi
 
   export HF_DATASETS_CACHE
 
@@ -114,8 +126,17 @@ if [[ "${BANANAS_CHAIN_WORKER:-0}" == "1" ]]; then
     --mod_list flops_module \
     --resume \
     --max_new_evals "$CHUNK_EVALS"
+
+  COMPLETED_AFTER=$(history_count "$HISTORY_PATH")
+  echo "Completed after chunk: ${COMPLETED_AFTER}/${TOTAL_EVALS}"
   exit 0
 fi
+
+DATASETS_LIST="${DATASETS[*]}"
+SEEDS_LIST="${SEEDS[*]}"
+export CONDA_ENV PYTHON_BIN JOB_SETUP PARTITION GPUS MEMORY QOS TIME_LIMIT
+export TOTAL_EVALS CHUNK_EVALS EPOCHS MAX_PARALLEL RESULTS_DIR SLURM_LOG_DIR HF_DATASETS_CACHE
+export DATASETS_LIST SEEDS_LIST
 
 base_sbatch_args=(
   --partition="$PARTITION"
@@ -130,33 +151,33 @@ if [[ -n "$QOS" ]]; then
   base_sbatch_args+=(--qos="$QOS")
 fi
 
-echo "Submitting BANANAS resume chains"
+echo "Starting rolling BANANAS array submission"
 echo "Datasets: ${DATASETS[*]}"
 echo "Seeds: ${SEEDS[*]}"
+echo "Array tasks per chunk: ${TASK_COUNT}, max parallel tasks: ${MAX_PARALLEL}"
 echo "Budget per run: total_evals=${TOTAL_EVALS}, chunk_evals=${CHUNK_EVALS}, epochs=${EPOCHS}"
-echo "Chunks per dataset/seed: ${CHUNKS}"
-echo "Array tasks per chunk: ${TASK_COUNT}, max parallel tasks per chunk: ${MAX_PARALLEL}"
-echo "Dependency between chunk arrays: ${DEPENDENCY_TYPE}"
-
-DATASETS_LIST="${DATASETS[*]}"
-SEEDS_LIST="${SEEDS[*]}"
-export CONDA_ENV PYTHON_BIN JOB_SETUP PARTITION GPUS MEMORY QOS TIME_LIMIT
-export TOTAL_EVALS CHUNK_EVALS EPOCHS MAX_PARALLEL DEPENDENCY_TYPE RESULTS_DIR SLURM_LOG_DIR HF_DATASETS_CACHE
-export DATASETS_LIST SEEDS_LIST
+echo "Chunks: ${CHUNKS}"
+echo "Only one chunk array is submitted at a time."
 
 SCRIPT_PATH="$0"
-previous_array_job=""
 for CHUNK in $(seq 1 "$CHUNKS"); do
-  sbatch_args=(
-    "${base_sbatch_args[@]}"
-    --job-name="bananas_c${CHUNK}"
-    --export="ALL,BANANAS_CHAIN_WORKER=1,BANANAS_CHAIN_CHUNK=${CHUNK}"
-  )
-  if [[ -n "$previous_array_job" ]]; then
-    sbatch_args+=(--dependency="${DEPENDENCY_TYPE}:${previous_array_job}")
+  echo "Submitting chunk ${CHUNK}/${CHUNKS}"
+  set +e
+  sbatch --wait \
+    "${base_sbatch_args[@]}" \
+    --job-name="bananas_roll_c${CHUNK}" \
+    --export="ALL,BANANAS_ROLLING_WORKER=1,BANANAS_ROLLING_CHUNK=${CHUNK}" \
+    "$SCRIPT_PATH"
+  status=$?
+  set -e
+
+  if (( status != 0 )); then
+    echo "Error: chunk ${CHUNK}/${CHUNKS} failed with sbatch status ${status}." >&2
+    echo "Fix the failed task, then rerun this script with the same RESULTS_DIR to resume." >&2
+    exit "$status"
   fi
 
-  job_id=$(sbatch --parsable "${sbatch_args[@]}" "$SCRIPT_PATH")
-  echo "Submitted chunk ${CHUNK}/${CHUNKS} as array job ${job_id}"
-  previous_array_job="$job_id"
+  echo "Chunk ${CHUNK}/${CHUNKS} completed."
 done
+
+echo "All rolling chunks completed."
