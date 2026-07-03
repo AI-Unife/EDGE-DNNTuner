@@ -1,0 +1,122 @@
+Using the latest cached version of the dataset since uoft-cs/cifar100 couldn't be found on the Hugging Face Hub (offline mode is enabled).
+Found the latest cached dataset configuration 'cifar100' at /hpc/home/fresca/.cache/huggingface/datasets/uoft-cs___cifar100/cifar100/0.0.0/aadb3af77e9048adbea6b47c21a81e47dd092ae5 (last modified on Wed Jun 24 10:15:16 2026).
+2026-07-01 04:56:49.331039: I tensorflow/core/util/port.cc:113] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2026-07-01 04:56:49.353398: E external/local_xla/xla/stream_executor/cuda/cuda_dnn.cc:9261] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+2026-07-01 04:56:49.353435: E external/local_xla/xla/stream_executor/cuda/cuda_fft.cc:607] Unable to register cuFFT factory: Attempting to register factory for plugin cuFFT when one has already been registered
+2026-07-01 04:56:49.354034: E external/local_xla/xla/stream_executor/cuda/cuda_blas.cc:1515] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+2026-07-01 04:56:49.357528: I tensorflow/core/platform/cpu_feature_guard.cc:182] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 AVX512F AVX512_VNNI AVX512_BF16 FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+2026-07-01 04:56:50.714151: W tensorflow/compiler/tf2tensorrt/utils/py_utils.cc:38] TF-TRT Warning: Could not find TensorRT
+2026-07-01 04:56:52.868427: W tensorflow/core/common_runtime/gpu/gpu_device.cc:2348] TensorFlow was not built with CUDA kernel binaries compatible with compute capability 9.0. CUDA kernels will be jit-compiled from PTX, which could take 30 minutes or longer.
+2026-07-01 04:56:52.873592: W tensorflow/core/common_runtime/gpu/gpu_device.cc:2348] TensorFlow was not built with CUDA kernel binaries compatible with compute capability 9.0. CUDA kernels will be jit-compiled from PTX, which could take 30 minutes or longer.
+2026-07-01 04:56:52.982154: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1929] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 20237 MB memory:  -> device: 0, name: NVIDIA H100 NVL MIG 1g.22gb, pci bus id: 0000:03:00.0, compute capability: 9.0
+2026-07-01 04:56:53.370924: I external/local_xla/xla/service/service.cc:168] XLA service 0x55ba57576510 initialized for platform Host (this does not guarantee that XLA will be used). Devices:
+2026-07-01 04:56:53.370957: I external/local_xla/xla/service/service.cc:176]   StreamExecutor device (0): Host, Default Version
+2026-07-01 04:56:53.374274: I tensorflow/compiler/mlir/tensorflow/utils/dump_mlir_util.cc:269] disabling MLIR crash reproducer, set env var `MLIR_CRASH_REPRODUCER_DIRECTORY` to enable.
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1782874613.396526  138675 device_compiler.h:186] Compiled cluster using XLA!  This line is logged at most once for the lifetime of the process.
+2026-07-01 04:56:53.397488: E external/local_xla/xla/stream_executor/stream_executor_internal.h:177] SetPriority unimplemented for this stream.
+2026-07-01 04:56:56.893399: I tensorflow/core/grappler/devices.cc:66] Number of eligible GPUs (core count >= 8, compute capability >= 0.0): 1
+2026-07-01 04:56:56.893475: I tensorflow/core/grappler/clusters/single_machine.cc:361] Starting new session
+2026-07-01 04:56:56.898632: W tensorflow/core/common_runtime/gpu/gpu_device.cc:2348] TensorFlow was not built with CUDA kernel binaries compatible with compute capability 9.0. CUDA kernels will be jit-compiled from PTX, which could take 30 minutes or longer.
+2026-07-01 04:56:56.902011: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1929] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 20237 MB memory:  -> device: 0, name: NVIDIA H100 NVL MIG 1g.22gb, pci bus id: 0000:03:00.0, compute capability: 9.0
+WARNING:tensorflow:From /hpc/home/fresca/.conda/envs/edge-dnntuner-bananas/lib/python3.10/site-packages/tensorflow/python/ops/nn_ops.py:5256: tensor_shape_from_node_def_name (from tensorflow.python.framework.graph_util_impl) is deprecated and will be removed in a future version.
+Instructions for updating:
+This API was designed for TensorFlow v1. See https://www.tensorflow.org/guide/migrate for instructions on how to migrate your code to TensorFlow v2.
+2026-07-01 04:56:58.520284: I external/local_xla/xla/stream_executor/cuda/cuda_dnn.cc:454] Loaded cuDNN version 8904
+2026-07-01 05:10:25.696709: I tensorflow/core/grappler/devices.cc:66] Number of eligible GPUs (core count >= 8, compute capability >= 0.0): 1
+2026-07-01 05:10:25.697179: I tensorflow/core/grappler/clusters/single_machine.cc:361] Starting new session
+2026-07-01 05:10:25.702267: W tensorflow/core/common_runtime/gpu/gpu_device.cc:2348] TensorFlow was not built with CUDA kernel binaries compatible with compute capability 9.0. CUDA kernels will be jit-compiled from PTX, which could take 30 minutes or longer.
+2026-07-01 05:10:25.705416: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1929] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 20237 MB memory:  -> device: 0, name: NVIDIA H100 NVL MIG 1g.22gb, pci bus id: 0000:03:00.0, compute capability: 9.0
+2026-07-01 05:14:53.510834: I tensorflow/core/grappler/devices.cc:66] Number of eligible GPUs (core count >= 8, compute capability >= 0.0): 1
+2026-07-01 05:14:53.511271: I tensorflow/core/grappler/clusters/single_machine.cc:361] Starting new session
+2026-07-01 05:14:53.516407: W tensorflow/core/common_runtime/gpu/gpu_device.cc:2348] TensorFlow was not built with CUDA kernel binaries compatible with compute capability 9.0. CUDA kernels will be jit-compiled from PTX, which could take 30 minutes or longer.
+2026-07-01 05:14:53.519572: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1929] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 20237 MB memory:  -> device: 0, name: NVIDIA H100 NVL MIG 1g.22gb, pci bus id: 0000:03:00.0, compute capability: 9.0
+2026-07-01 05:28:21.372111: I tensorflow/core/grappler/devices.cc:66] Number of eligible GPUs (core count >= 8, compute capability >= 0.0): 1
+2026-07-01 05:28:21.372639: I tensorflow/core/grappler/clusters/single_machine.cc:361] Starting new session
+2026-07-01 05:28:21.377662: W tensorflow/core/common_runtime/gpu/gpu_device.cc:2348] TensorFlow was not built with CUDA kernel binaries compatible with compute capability 9.0. CUDA kernels will be jit-compiled from PTX, which could take 30 minutes or longer.
+2026-07-01 05:28:21.380820: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1929] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 20237 MB memory:  -> device: 0, name: NVIDIA H100 NVL MIG 1g.22gb, pci bus id: 0000:03:00.0, compute capability: 9.0
+2026-07-01 05:30:49.007480: I tensorflow/core/grappler/devices.cc:66] Number of eligible GPUs (core count >= 8, compute capability >= 0.0): 1
+2026-07-01 05:30:49.007949: I tensorflow/core/grappler/clusters/single_machine.cc:361] Starting new session
+2026-07-01 05:30:49.013029: W tensorflow/core/common_runtime/gpu/gpu_device.cc:2348] TensorFlow was not built with CUDA kernel binaries compatible with compute capability 9.0. CUDA kernels will be jit-compiled from PTX, which could take 30 minutes or longer.
+2026-07-01 05:30:49.016341: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1929] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 20237 MB memory:  -> device: 0, name: NVIDIA H100 NVL MIG 1g.22gb, pci bus id: 0000:03:00.0, compute capability: 9.0
+2026-07-01 05:33:16.463032: I tensorflow/core/grappler/devices.cc:66] Number of eligible GPUs (core count >= 8, compute capability >= 0.0): 1
+2026-07-01 05:33:16.463503: I tensorflow/core/grappler/clusters/single_machine.cc:361] Starting new session
+2026-07-01 05:33:16.468553: W tensorflow/core/common_runtime/gpu/gpu_device.cc:2348] TensorFlow was not built with CUDA kernel binaries compatible with compute capability 9.0. CUDA kernels will be jit-compiled from PTX, which could take 30 minutes or longer.
+2026-07-01 05:33:16.471731: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1929] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 20237 MB memory:  -> device: 0, name: NVIDIA H100 NVL MIG 1g.22gb, pci bus id: 0000:03:00.0, compute capability: 9.0
+2026-07-01 05:36:44.466338: I tensorflow/core/grappler/devices.cc:66] Number of eligible GPUs (core count >= 8, compute capability >= 0.0): 1
+2026-07-01 05:36:44.466739: I tensorflow/core/grappler/clusters/single_machine.cc:361] Starting new session
+2026-07-01 05:36:44.471735: W tensorflow/core/common_runtime/gpu/gpu_device.cc:2348] TensorFlow was not built with CUDA kernel binaries compatible with compute capability 9.0. CUDA kernels will be jit-compiled from PTX, which could take 30 minutes or longer.
+2026-07-01 05:36:44.476171: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1929] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 20237 MB memory:  -> device: 0, name: NVIDIA H100 NVL MIG 1g.22gb, pci bus id: 0000:03:00.0, compute capability: 9.0
+2026-07-01 06:13:11.831172: I tensorflow/core/grappler/devices.cc:66] Number of eligible GPUs (core count >= 8, compute capability >= 0.0): 1
+2026-07-01 06:13:11.831662: I tensorflow/core/grappler/clusters/single_machine.cc:361] Starting new session
+2026-07-01 06:13:11.836533: W tensorflow/core/common_runtime/gpu/gpu_device.cc:2348] TensorFlow was not built with CUDA kernel binaries compatible with compute capability 9.0. CUDA kernels will be jit-compiled from PTX, which could take 30 minutes or longer.
+2026-07-01 06:13:11.839561: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1929] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 20237 MB memory:  -> device: 0, name: NVIDIA H100 NVL MIG 1g.22gb, pci bus id: 0000:03:00.0, compute capability: 9.0
+2026-07-01 06:30:39.589500: I tensorflow/core/grappler/devices.cc:66] Number of eligible GPUs (core count >= 8, compute capability >= 0.0): 1
+2026-07-01 06:30:39.589934: I tensorflow/core/grappler/clusters/single_machine.cc:361] Starting new session
+2026-07-01 06:30:39.594813: W tensorflow/core/common_runtime/gpu/gpu_device.cc:2348] TensorFlow was not built with CUDA kernel binaries compatible with compute capability 9.0. CUDA kernels will be jit-compiled from PTX, which could take 30 minutes or longer.
+2026-07-01 06:30:39.597841: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1929] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 20237 MB memory:  -> device: 0, name: NVIDIA H100 NVL MIG 1g.22gb, pci bus id: 0000:03:00.0, compute capability: 9.0
+2026-07-01 06:33:06.804624: I tensorflow/core/grappler/devices.cc:66] Number of eligible GPUs (core count >= 8, compute capability >= 0.0): 1
+2026-07-01 06:33:06.805107: I tensorflow/core/grappler/clusters/single_machine.cc:361] Starting new session
+2026-07-01 06:33:06.809926: W tensorflow/core/common_runtime/gpu/gpu_device.cc:2348] TensorFlow was not built with CUDA kernel binaries compatible with compute capability 9.0. CUDA kernels will be jit-compiled from PTX, which could take 30 minutes or longer.
+2026-07-01 06:33:06.812947: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1929] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 20237 MB memory:  -> device: 0, name: NVIDIA H100 NVL MIG 1g.22gb, pci bus id: 0000:03:00.0, compute capability: 9.0
+2026-07-01 06:35:34.155897: I tensorflow/core/grappler/devices.cc:66] Number of eligible GPUs (core count >= 8, compute capability >= 0.0): 1
+2026-07-01 06:35:34.156327: I tensorflow/core/grappler/clusters/single_machine.cc:361] Starting new session
+2026-07-01 06:35:34.162322: W tensorflow/core/common_runtime/gpu/gpu_device.cc:2348] TensorFlow was not built with CUDA kernel binaries compatible with compute capability 9.0. CUDA kernels will be jit-compiled from PTX, which could take 30 minutes or longer.
+2026-07-01 06:35:34.165344: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1929] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 20237 MB memory:  -> device: 0, name: NVIDIA H100 NVL MIG 1g.22gb, pci bus id: 0000:03:00.0, compute capability: 9.0
+2026-07-01 06:41:02.009573: I tensorflow/core/grappler/devices.cc:66] Number of eligible GPUs (core count >= 8, compute capability >= 0.0): 1
+2026-07-01 06:41:02.010027: I tensorflow/core/grappler/clusters/single_machine.cc:361] Starting new session
+2026-07-01 06:41:02.014888: W tensorflow/core/common_runtime/gpu/gpu_device.cc:2348] TensorFlow was not built with CUDA kernel binaries compatible with compute capability 9.0. CUDA kernels will be jit-compiled from PTX, which could take 30 minutes or longer.
+2026-07-01 06:41:02.017945: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1929] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 20237 MB memory:  -> device: 0, name: NVIDIA H100 NVL MIG 1g.22gb, pci bus id: 0000:03:00.0, compute capability: 9.0
+2026-07-01 06:47:29.766890: I tensorflow/core/grappler/devices.cc:66] Number of eligible GPUs (core count >= 8, compute capability >= 0.0): 1
+2026-07-01 06:47:29.767348: I tensorflow/core/grappler/clusters/single_machine.cc:361] Starting new session
+2026-07-01 06:47:29.772210: W tensorflow/core/common_runtime/gpu/gpu_device.cc:2348] TensorFlow was not built with CUDA kernel binaries compatible with compute capability 9.0. CUDA kernels will be jit-compiled from PTX, which could take 30 minutes or longer.
+2026-07-01 06:47:29.775249: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1929] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 20237 MB memory:  -> device: 0, name: NVIDIA H100 NVL MIG 1g.22gb, pci bus id: 0000:03:00.0, compute capability: 9.0
+2026-07-01 06:52:56.879412: I tensorflow/core/grappler/devices.cc:66] Number of eligible GPUs (core count >= 8, compute capability >= 0.0): 1
+2026-07-01 06:52:56.879856: I tensorflow/core/grappler/clusters/single_machine.cc:361] Starting new session
+2026-07-01 06:52:56.884683: W tensorflow/core/common_runtime/gpu/gpu_device.cc:2348] TensorFlow was not built with CUDA kernel binaries compatible with compute capability 9.0. CUDA kernels will be jit-compiled from PTX, which could take 30 minutes or longer.
+2026-07-01 06:52:56.887707: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1929] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 20237 MB memory:  -> device: 0, name: NVIDIA H100 NVL MIG 1g.22gb, pci bus id: 0000:03:00.0, compute capability: 9.0
+2026-07-01 07:10:24.455939: I tensorflow/core/grappler/devices.cc:66] Number of eligible GPUs (core count >= 8, compute capability >= 0.0): 1
+2026-07-01 07:10:24.456344: I tensorflow/core/grappler/clusters/single_machine.cc:361] Starting new session
+2026-07-01 07:10:24.461251: W tensorflow/core/common_runtime/gpu/gpu_device.cc:2348] TensorFlow was not built with CUDA kernel binaries compatible with compute capability 9.0. CUDA kernels will be jit-compiled from PTX, which could take 30 minutes or longer.
+2026-07-01 07:10:24.464466: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1929] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 20237 MB memory:  -> device: 0, name: NVIDIA H100 NVL MIG 1g.22gb, pci bus id: 0000:03:00.0, compute capability: 9.0
+2026-07-01 07:13:52.304799: I tensorflow/core/grappler/devices.cc:66] Number of eligible GPUs (core count >= 8, compute capability >= 0.0): 1
+2026-07-01 07:13:52.305157: I tensorflow/core/grappler/clusters/single_machine.cc:361] Starting new session
+2026-07-01 07:13:52.310004: W tensorflow/core/common_runtime/gpu/gpu_device.cc:2348] TensorFlow was not built with CUDA kernel binaries compatible with compute capability 9.0. CUDA kernels will be jit-compiled from PTX, which could take 30 minutes or longer.
+2026-07-01 07:13:52.313039: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1929] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 20237 MB memory:  -> device: 0, name: NVIDIA H100 NVL MIG 1g.22gb, pci bus id: 0000:03:00.0, compute capability: 9.0
+2026-07-01 07:24:19.496820: I tensorflow/core/grappler/devices.cc:66] Number of eligible GPUs (core count >= 8, compute capability >= 0.0): 1
+2026-07-01 07:24:19.497225: I tensorflow/core/grappler/clusters/single_machine.cc:361] Starting new session
+2026-07-01 07:24:19.502076: W tensorflow/core/common_runtime/gpu/gpu_device.cc:2348] TensorFlow was not built with CUDA kernel binaries compatible with compute capability 9.0. CUDA kernels will be jit-compiled from PTX, which could take 30 minutes or longer.
+2026-07-01 07:24:19.505091: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1929] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 20237 MB memory:  -> device: 0, name: NVIDIA H100 NVL MIG 1g.22gb, pci bus id: 0000:03:00.0, compute capability: 9.0
+2026-07-01 07:54:46.641167: I tensorflow/core/grappler/devices.cc:66] Number of eligible GPUs (core count >= 8, compute capability >= 0.0): 1
+2026-07-01 07:54:46.641589: I tensorflow/core/grappler/clusters/single_machine.cc:361] Starting new session
+2026-07-01 07:54:46.646462: W tensorflow/core/common_runtime/gpu/gpu_device.cc:2348] TensorFlow was not built with CUDA kernel binaries compatible with compute capability 9.0. CUDA kernels will be jit-compiled from PTX, which could take 30 minutes or longer.
+2026-07-01 07:54:46.649648: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1929] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 20237 MB memory:  -> device: 0, name: NVIDIA H100 NVL MIG 1g.22gb, pci bus id: 0000:03:00.0, compute capability: 9.0
+2026-07-01 08:26:13.779554: I tensorflow/core/grappler/devices.cc:66] Number of eligible GPUs (core count >= 8, compute capability >= 0.0): 1
+2026-07-01 08:26:13.779943: I tensorflow/core/grappler/clusters/single_machine.cc:361] Starting new session
+2026-07-01 08:26:13.784815: W tensorflow/core/common_runtime/gpu/gpu_device.cc:2348] TensorFlow was not built with CUDA kernel binaries compatible with compute capability 9.0. CUDA kernels will be jit-compiled from PTX, which could take 30 minutes or longer.
+2026-07-01 08:26:13.787855: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1929] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 20237 MB memory:  -> device: 0, name: NVIDIA H100 NVL MIG 1g.22gb, pci bus id: 0000:03:00.0, compute capability: 9.0
+2026-07-01 08:36:41.713066: I tensorflow/core/grappler/devices.cc:66] Number of eligible GPUs (core count >= 8, compute capability >= 0.0): 1
+2026-07-01 08:36:41.713512: I tensorflow/core/grappler/clusters/single_machine.cc:361] Starting new session
+2026-07-01 08:36:41.718418: W tensorflow/core/common_runtime/gpu/gpu_device.cc:2348] TensorFlow was not built with CUDA kernel binaries compatible with compute capability 9.0. CUDA kernels will be jit-compiled from PTX, which could take 30 minutes or longer.
+2026-07-01 08:36:41.721486: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1929] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 20237 MB memory:  -> device: 0, name: NVIDIA H100 NVL MIG 1g.22gb, pci bus id: 0000:03:00.0, compute capability: 9.0
+2026-07-01 08:41:08.596333: I tensorflow/core/grappler/devices.cc:66] Number of eligible GPUs (core count >= 8, compute capability >= 0.0): 1
+2026-07-01 08:41:08.596753: I tensorflow/core/grappler/clusters/single_machine.cc:361] Starting new session
+2026-07-01 08:41:08.601643: W tensorflow/core/common_runtime/gpu/gpu_device.cc:2348] TensorFlow was not built with CUDA kernel binaries compatible with compute capability 9.0. CUDA kernels will be jit-compiled from PTX, which could take 30 minutes or longer.
+2026-07-01 08:41:08.605034: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1929] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 20237 MB memory:  -> device: 0, name: NVIDIA H100 NVL MIG 1g.22gb, pci bus id: 0000:03:00.0, compute capability: 9.0
+2026-07-01 08:50:35.687443: I tensorflow/core/grappler/devices.cc:66] Number of eligible GPUs (core count >= 8, compute capability >= 0.0): 1
+2026-07-01 08:50:35.687820: I tensorflow/core/grappler/clusters/single_machine.cc:361] Starting new session
+2026-07-01 08:50:35.692694: W tensorflow/core/common_runtime/gpu/gpu_device.cc:2348] TensorFlow was not built with CUDA kernel binaries compatible with compute capability 9.0. CUDA kernels will be jit-compiled from PTX, which could take 30 minutes or longer.
+2026-07-01 08:50:35.695748: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1929] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 20237 MB memory:  -> device: 0, name: NVIDIA H100 NVL MIG 1g.22gb, pci bus id: 0000:03:00.0, compute capability: 9.0
+2026-07-01 09:02:03.407729: I tensorflow/core/grappler/devices.cc:66] Number of eligible GPUs (core count >= 8, compute capability >= 0.0): 1
+2026-07-01 09:02:03.408140: I tensorflow/core/grappler/clusters/single_machine.cc:361] Starting new session
+2026-07-01 09:02:03.413012: W tensorflow/core/common_runtime/gpu/gpu_device.cc:2348] TensorFlow was not built with CUDA kernel binaries compatible with compute capability 9.0. CUDA kernels will be jit-compiled from PTX, which could take 30 minutes or longer.
+2026-07-01 09:02:03.416203: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1929] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 20237 MB memory:  -> device: 0, name: NVIDIA H100 NVL MIG 1g.22gb, pci bus id: 0000:03:00.0, compute capability: 9.0
+2026-07-01 09:08:31.176971: I tensorflow/core/grappler/devices.cc:66] Number of eligible GPUs (core count >= 8, compute capability >= 0.0): 1
+2026-07-01 09:08:31.177370: I tensorflow/core/grappler/clusters/single_machine.cc:361] Starting new session
+2026-07-01 09:08:31.182190: W tensorflow/core/common_runtime/gpu/gpu_device.cc:2348] TensorFlow was not built with CUDA kernel binaries compatible with compute capability 9.0. CUDA kernels will be jit-compiled from PTX, which could take 30 minutes or longer.
+2026-07-01 09:08:31.185402: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1929] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 20237 MB memory:  -> device: 0, name: NVIDIA H100 NVL MIG 1g.22gb, pci bus id: 0000:03:00.0, compute capability: 9.0
+2026-07-01 09:13:58.324008: I tensorflow/core/grappler/devices.cc:66] Number of eligible GPUs (core count >= 8, compute capability >= 0.0): 1
+2026-07-01 09:13:58.324439: I tensorflow/core/grappler/clusters/single_machine.cc:361] Starting new session
+2026-07-01 09:13:58.329477: W tensorflow/core/common_runtime/gpu/gpu_device.cc:2348] TensorFlow was not built with CUDA kernel binaries compatible with compute capability 9.0. CUDA kernels will be jit-compiled from PTX, which could take 30 minutes or longer.
+2026-07-01 09:13:58.332503: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1929] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 20237 MB memory:  -> device: 0, name: NVIDIA H100 NVL MIG 1g.22gb, pci bus id: 0000:03:00.0, compute capability: 9.0

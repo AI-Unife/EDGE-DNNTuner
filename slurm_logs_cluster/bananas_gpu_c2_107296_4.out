@@ -1,0 +1,309 @@
+Running rolling chunk 2/40
+Array task 4/10: dataset=cifar10, seed=84
+Completed before chunk: 25/1000
+Budget: chunk_evals=25, epochs=100
+Result dir=results_BANANAS_controller/bananas_cifar10_seed84_e1000_ep100
+[exp_config] Created config.yaml at: /hpc/home/fresca/EDGE-DNNTuner/results_BANANAS_controller/bananas_cifar10_seed84_e1000_ep100/config.yaml
+50000 train samples
+10000 test samples
+Initialized NeuralNetwork with dataset. ROI mode: False
+FLOPS module weight: 0.3
+
+STARTING BANANAS BASELINE
+
+[INFO] Resumed 25 previous BANANAS evaluations from results_BANANAS_controller/bananas_cifar10_seed84_e1000_ep100/algorithm_logs/bananas_history.csv.
+
+--- BANANAS ITERATION 26 / 1000 ---
+Chosen point: {'num_neurons': 4, 'unit_c1': 4, 'unit_c2': 5, 'dr_f': 0.275221568233153, 'learning_rate': 0.00025339426834476253, 'batch_size': 8, 'optimizer': 'SGD', 'activation': 'selu', 'data_augmentation': True, 'reg_l2': True, 'skip_connection': True, 'new_fc_1': 32, 'new_fc_2': 18, 'new_fc_3': 1, 'new_fc_4': 4, 'new_fc_5': 11, 'new_fc_6': 21, 'new_fc_7': 24, 'new_fc_8': 27, 'new_fc_9': 7, 'new_fc_10': 9}
+[94m
+|  --> START TRAINING ITERATION 0[0m
+[INFO] Flags -> DA: True, L2: True, Skip: True
+Building model with input_shape=(32, 32, 3), pos_input_shape=None, layer_x_block=2
+Model: "model"
+__________________________________________________________________________________________________
+ Layer (type)                Output Shape                 Param #   Connected to                  
+==================================================================================================
+ input_2 (InputLayer)        [(None, 32, 32, 3)]          0         []                            
+                                                                                                  
+ conv2d (Conv2D)             (None, 32, 32, 16)           448       ['input_2[0][0]']             
+                                                                                                  
+ activation (Activation)     (None, 32, 32, 16)           0         ['conv2d[1][0]']              
+                                                                                                  
+ conv2d_2 (Conv2D)           (None, 32, 32, 16)           64        ['input_2[0][0]']             
+                                                                                                  
+ conv2d_1 (Conv2D)           (None, 32, 32, 16)           2320      ['activation[1][0]']          
+                                                                                                  
+ add (Add)                   (None, 32, 32, 16)           0         ['conv2d_2[1][0]',            
+                                                                     'conv2d_1[1][0]']            
+                                                                                                  
+ activation_1 (Activation)   (None, 32, 32, 16)           0         ['add[1][0]']                 
+                                                                                                  
+ max_pooling2d (MaxPooling2  (None, 16, 16, 16)           0         ['activation_1[1][0]']        
+ D)                                                                                               
+                                                                                                  
+ conv2d_3 (Conv2D)           (None, 16, 16, 20)           2900      ['max_pooling2d[1][0]']       
+                                                                                                  
+ activation_2 (Activation)   (None, 16, 16, 20)           0         ['conv2d_3[1][0]']            
+                                                                                                  
+ conv2d_5 (Conv2D)           (None, 16, 16, 20)           340       ['max_pooling2d[1][0]']       
+                                                                                                  
+ conv2d_4 (Conv2D)           (None, 16, 16, 20)           3620      ['activation_2[1][0]']        
+                                                                                                  
+ add_1 (Add)                 (None, 16, 16, 20)           0         ['conv2d_5[1][0]',            
+                                                                     'conv2d_4[1][0]']            
+                                                                                                  
+ activation_3 (Activation)   (None, 16, 16, 20)           0         ['add_1[1][0]']               
+                                                                                                  
+ max_pooling2d_1 (MaxPoolin  (None, 8, 8, 20)             0         ['activation_3[1][0]']        
+ g2D)                                                                                             
+                                                                                                  
+ flatten (Flatten)           (None, 1280)                 0         ['max_pooling2d_1[1][0]']     
+                                                                                                  
+ dense (Dense)               (None, 128)                  163968    ['flatten[1][0]']             
+                                                                                                  
+ activation_4 (Activation)   (None, 128)                  0         ['dense[1][0]']               
+                                                                                                  
+ dropout (Dropout)           (None, 128)                  0         ['activation_4[1][0]']        
+                                                                                                  
+ dense_1 (Dense)             (None, 72)                   9288      ['dropout[1][0]']             
+                                                                                                  
+ activation_5 (Activation)   (None, 72)                   0         ['dense_1[1][0]']             
+                                                                                                  
+ dropout_1 (Dropout)         (None, 72)                   0         ['activation_5[1][0]']        
+                                                                                                  
+ dense_2 (Dense)             (None, 4)                    292       ['dropout_1[1][0]']           
+                                                                                                  
+ activation_6 (Activation)   (None, 4)                    0         ['dense_2[1][0]']             
+                                                                                                  
+ dropout_2 (Dropout)         (None, 4)                    0         ['activation_6[1][0]']        
+                                                                                                  
+ dense_3 (Dense)             (None, 16)                   80        ['dropout_2[1][0]']           
+                                                                                                  
+ activation_7 (Activation)   (None, 16)                   0         ['dense_3[1][0]']             
+                                                                                                  
+ dropout_3 (Dropout)         (None, 16)                   0         ['activation_7[1][0]']        
+                                                                                                  
+ dense_4 (Dense)             (None, 44)                   748       ['dropout_3[1][0]']           
+                                                                                                  
+ activation_8 (Activation)   (None, 44)                   0         ['dense_4[1][0]']             
+                                                                                                  
+ dropout_4 (Dropout)         (None, 44)                   0         ['activation_8[1][0]']        
+                                                                                                  
+ dense_5 (Dense)             (None, 84)                   3780      ['dropout_4[1][0]']           
+                                                                                                  
+ activation_9 (Activation)   (None, 84)                   0         ['dense_5[1][0]']             
+                                                                                                  
+ dropout_5 (Dropout)         (None, 84)                   0         ['activation_9[1][0]']        
+                                                                                                  
+ dense_6 (Dense)             (None, 96)                   8160      ['dropout_5[1][0]']           
+                                                                                                  
+ activation_10 (Activation)  (None, 96)                   0         ['dense_6[1][0]']             
+                                                                                                  
+ dropout_6 (Dropout)         (None, 96)                   0         ['activation_10[1][0]']       
+                                                                                                  
+ dense_7 (Dense)             (None, 108)                  10476     ['dropout_6[1][0]']           
+                                                                                                  
+ activation_11 (Activation)  (None, 108)                  0         ['dense_7[1][0]']             
+                                                                                                  
+ dropout_7 (Dropout)         (None, 108)                  0         ['activation_11[1][0]']       
+                                                                                                  
+ dense_8 (Dense)             (None, 28)                   3052      ['dropout_7[1][0]']           
+                                                                                                  
+ activation_12 (Activation)  (None, 28)                   0         ['dense_8[1][0]']             
+                                                                                                  
+ dropout_8 (Dropout)         (None, 28)                   0         ['activation_12[1][0]']       
+                                                                                                  
+ dense_9 (Dense)             (None, 36)                   1044      ['dropout_8[1][0]']           
+                                                                                                  
+ activation_13 (Activation)  (None, 36)                   0         ['dense_9[1][0]']             
+                                                                                                  
+ dropout_9 (Dropout)         (None, 36)                   0         ['activation_13[1][0]']       
+                                                                                                  
+ dense_10 (Dense)            (None, 10)                   370       ['dropout_9[1][0]']           
+                                                                                                  
+==================================================================================================
+Total params: 210950 (824.02 KB)
+Trainable params: 210950 (824.02 KB)
+Non-trainable params: 0 (0.00 Byte)
+__________________________________________________________________________________________________
+Epoch 1/100
+6250/6250 - 23s - loss: 10.2399 - accuracy: 0.1046 - val_loss: 9.2267 - val_accuracy: 0.1598 - 23s/epoch - 4ms/step
+Epoch 2/100
+6250/6250 - 21s - loss: 9.2166 - accuracy: 0.1310 - val_loss: 8.6066 - val_accuracy: 0.1862 - 21s/epoch - 3ms/step
+Epoch 3/100
+6250/6250 - 21s - loss: 8.5995 - accuracy: 0.1576 - val_loss: 8.1488 - val_accuracy: 0.1937 - 21s/epoch - 3ms/step
+Epoch 4/100
+6250/6250 - 21s - loss: 8.1133 - accuracy: 0.1675 - val_loss: 7.7399 - val_accuracy: 0.1952 - 21s/epoch - 3ms/step
+Epoch 5/100
+6250/6250 - 21s - loss: 7.6932 - accuracy: 0.1734 - val_loss: 7.4062 - val_accuracy: 0.1975 - 21s/epoch - 3ms/step
+Epoch 6/100
+6250/6250 - 21s - loss: 7.3219 - accuracy: 0.1737 - val_loss: 7.0349 - val_accuracy: 0.2054 - 21s/epoch - 3ms/step
+Epoch 7/100
+6250/6250 - 21s - loss: 6.9872 - accuracy: 0.1776 - val_loss: 6.7249 - val_accuracy: 0.2092 - 21s/epoch - 3ms/step
+Epoch 8/100
+6250/6250 - 21s - loss: 6.6768 - accuracy: 0.1820 - val_loss: 6.4419 - val_accuracy: 0.2116 - 21s/epoch - 3ms/step
+Epoch 9/100
+6250/6250 - 21s - loss: 6.3908 - accuracy: 0.1847 - val_loss: 6.1659 - val_accuracy: 0.2110 - 21s/epoch - 3ms/step
+Epoch 10/100
+6250/6250 - 21s - loss: 6.1239 - accuracy: 0.1846 - val_loss: 5.9374 - val_accuracy: 0.2154 - 21s/epoch - 3ms/step
+Epoch 11/100
+6250/6250 - 21s - loss: 5.8753 - accuracy: 0.1838 - val_loss: 5.7203 - val_accuracy: 0.2013 - 21s/epoch - 3ms/step
+Epoch 12/100
+6250/6250 - 21s - loss: 5.6499 - accuracy: 0.1891 - val_loss: 5.4823 - val_accuracy: 0.2087 - 21s/epoch - 3ms/step
+Epoch 13/100
+6250/6250 - 21s - loss: 5.4344 - accuracy: 0.1903 - val_loss: 5.2699 - val_accuracy: 0.1997 - 21s/epoch - 3ms/step
+Epoch 14/100
+6250/6250 - 20s - loss: 5.2383 - accuracy: 0.1877 - val_loss: 5.0850 - val_accuracy: 0.2085 - 20s/epoch - 3ms/step
+Epoch 15/100
+6250/6250 - 20s - loss: 5.0519 - accuracy: 0.1915 - val_loss: 4.9042 - val_accuracy: 0.2044 - 20s/epoch - 3ms/step
+Epoch 16/100
+6250/6250 - 20s - loss: 4.8765 - accuracy: 0.1917 - val_loss: 4.7362 - val_accuracy: 0.2015 - 20s/epoch - 3ms/step
+Epoch 17/100
+6250/6250 - 21s - loss: 4.7102 - accuracy: 0.1922 - val_loss: 4.5949 - val_accuracy: 0.2000 - 21s/epoch - 3ms/step
+Epoch 18/100
+6250/6250 - 21s - loss: 4.5570 - accuracy: 0.1940 - val_loss: 4.4379 - val_accuracy: 0.2028 - 21s/epoch - 3ms/step
+Epoch 19/100
+6250/6250 - 21s - loss: 4.4122 - accuracy: 0.1953 - val_loss: 4.3012 - val_accuracy: 0.2075 - 21s/epoch - 3ms/step
+Epoch 20/100
+6250/6250 - 21s - loss: 4.2765 - accuracy: 0.1950 - val_loss: 4.1722 - val_accuracy: 0.2069 - 21s/epoch - 3ms/step
+Epoch 21/100
+6250/6250 - 21s - loss: 4.1515 - accuracy: 0.1945 - val_loss: 4.0533 - val_accuracy: 0.2064 - 21s/epoch - 3ms/step
+Epoch 22/100
+6250/6250 - 21s - loss: 4.0310 - accuracy: 0.1982 - val_loss: 3.9518 - val_accuracy: 0.2082 - 21s/epoch - 3ms/step
+Epoch 23/100
+6250/6250 - 21s - loss: 3.9178 - accuracy: 0.1990 - val_loss: 3.8311 - val_accuracy: 0.2064 - 21s/epoch - 3ms/step
+Epoch 24/100
+6250/6250 - 21s - loss: 3.8121 - accuracy: 0.2033 - val_loss: 3.7293 - val_accuracy: 0.2069 - 21s/epoch - 3ms/step
+Epoch 25/100
+6250/6250 - 20s - loss: 3.7145 - accuracy: 0.2023 - val_loss: 3.6290 - val_accuracy: 0.2097 - 20s/epoch - 3ms/step
+Epoch 26/100
+6250/6250 - 20s - loss: 3.6206 - accuracy: 0.2054 - val_loss: 3.5382 - val_accuracy: 0.2105 - 20s/epoch - 3ms/step
+Epoch 27/100
+6250/6250 - 20s - loss: 3.5300 - accuracy: 0.2013 - val_loss: 3.4577 - val_accuracy: 0.2145 - 20s/epoch - 3ms/step
+Epoch 28/100
+6250/6250 - 21s - loss: 3.4489 - accuracy: 0.2070 - val_loss: 3.3865 - val_accuracy: 0.2079 - 21s/epoch - 3ms/step
+Epoch 29/100
+6250/6250 - 21s - loss: 3.3677 - accuracy: 0.2054 - val_loss: 3.3077 - val_accuracy: 0.2105 - 21s/epoch - 3ms/step
+Epoch 30/100
+6250/6250 - 21s - loss: 3.2970 - accuracy: 0.2078 - val_loss: 3.2349 - val_accuracy: 0.2196 - 21s/epoch - 3ms/step
+Epoch 31/100
+6250/6250 - 21s - loss: 3.2282 - accuracy: 0.2096 - val_loss: 3.1632 - val_accuracy: 0.2148 - 21s/epoch - 3ms/step
+Epoch 32/100
+6250/6250 - 21s - loss: 3.1603 - accuracy: 0.2076 - val_loss: 3.1079 - val_accuracy: 0.2144 - 21s/epoch - 3ms/step
+Epoch 33/100
+6250/6250 - 21s - loss: 3.0998 - accuracy: 0.2077 - val_loss: 3.0479 - val_accuracy: 0.2149 - 21s/epoch - 3ms/step
+Epoch 34/100
+6250/6250 - 21s - loss: 3.0438 - accuracy: 0.2093 - val_loss: 2.9875 - val_accuracy: 0.2208 - 21s/epoch - 3ms/step
+Epoch 35/100
+6250/6250 - 21s - loss: 2.9885 - accuracy: 0.2108 - val_loss: 2.9431 - val_accuracy: 0.2213 - 21s/epoch - 3ms/step
+Epoch 36/100
+6250/6250 - 21s - loss: 2.9366 - accuracy: 0.2123 - val_loss: 2.8867 - val_accuracy: 0.2236 - 21s/epoch - 3ms/step
+Epoch 37/100
+6250/6250 - 21s - loss: 2.8877 - accuracy: 0.2168 - val_loss: 2.8425 - val_accuracy: 0.2179 - 21s/epoch - 3ms/step
+Epoch 38/100
+6250/6250 - 21s - loss: 2.8450 - accuracy: 0.2141 - val_loss: 2.7964 - val_accuracy: 0.2190 - 21s/epoch - 3ms/step
+Epoch 39/100
+6250/6250 - 21s - loss: 2.7988 - accuracy: 0.2154 - val_loss: 2.7570 - val_accuracy: 0.2225 - 21s/epoch - 3ms/step
+Epoch 40/100
+6250/6250 - 21s - loss: 2.7581 - accuracy: 0.2182 - val_loss: 2.7205 - val_accuracy: 0.2337 - 21s/epoch - 3ms/step
+Epoch 41/100
+6250/6250 - 21s - loss: 2.7204 - accuracy: 0.2151 - val_loss: 2.6789 - val_accuracy: 0.2316 - 21s/epoch - 3ms/step
+Epoch 42/100
+6250/6250 - 21s - loss: 2.6834 - accuracy: 0.2192 - val_loss: 2.6545 - val_accuracy: 0.2286 - 21s/epoch - 3ms/step
+Epoch 43/100
+6250/6250 - 20s - loss: 2.6493 - accuracy: 0.2177 - val_loss: 2.6124 - val_accuracy: 0.2272 - 20s/epoch - 3ms/step
+Epoch 44/100
+6250/6250 - 20s - loss: 2.6167 - accuracy: 0.2202 - val_loss: 2.5825 - val_accuracy: 0.2284 - 20s/epoch - 3ms/step
+Epoch 45/100
+6250/6250 - 20s - loss: 2.5884 - accuracy: 0.2201 - val_loss: 2.5539 - val_accuracy: 0.2298 - 20s/epoch - 3ms/step
+Epoch 46/100
+6250/6250 - 21s - loss: 2.5557 - accuracy: 0.2247 - val_loss: 2.5438 - val_accuracy: 0.2203 - 21s/epoch - 3ms/step
+Epoch 47/100
+6250/6250 - 21s - loss: 2.5311 - accuracy: 0.2226 - val_loss: 2.4977 - val_accuracy: 0.2312 - 21s/epoch - 3ms/step
+Epoch 48/100
+6250/6250 - 21s - loss: 2.5038 - accuracy: 0.2242 - val_loss: 2.4733 - val_accuracy: 0.2302 - 21s/epoch - 3ms/step
+Epoch 49/100
+6250/6250 - 21s - loss: 2.4796 - accuracy: 0.2239 - val_loss: 2.4488 - val_accuracy: 0.2356 - 21s/epoch - 3ms/step
+Epoch 50/100
+6250/6250 - 21s - loss: 2.4564 - accuracy: 0.2253 - val_loss: 2.4271 - val_accuracy: 0.2315 - 21s/epoch - 3ms/step
+Epoch 51/100
+6250/6250 - 21s - loss: 2.4331 - accuracy: 0.2262 - val_loss: 2.4072 - val_accuracy: 0.2337 - 21s/epoch - 3ms/step
+Epoch 52/100
+6250/6250 - 21s - loss: 2.4122 - accuracy: 0.2274 - val_loss: 2.3867 - val_accuracy: 0.2334 - 21s/epoch - 3ms/step
+Epoch 53/100
+6250/6250 - 21s - loss: 2.3949 - accuracy: 0.2307 - val_loss: 2.3694 - val_accuracy: 0.2367 - 21s/epoch - 3ms/step
+Epoch 54/100
+6250/6250 - 21s - loss: 2.3736 - accuracy: 0.2294 - val_loss: 2.3496 - val_accuracy: 0.2402 - 21s/epoch - 3ms/step
+Epoch 55/100
+6250/6250 - 21s - loss: 2.3548 - accuracy: 0.2321 - val_loss: 2.3344 - val_accuracy: 0.2333 - 21s/epoch - 3ms/step
+Epoch 56/100
+6250/6250 - 21s - loss: 2.3368 - accuracy: 0.2340 - val_loss: 2.3154 - val_accuracy: 0.2417 - 21s/epoch - 3ms/step
+Epoch 57/100
+6250/6250 - 21s - loss: 2.3224 - accuracy: 0.2320 - val_loss: 2.3084 - val_accuracy: 0.2393 - 21s/epoch - 3ms/step
+Epoch 58/100
+6250/6250 - 21s - loss: 2.3060 - accuracy: 0.2329 - val_loss: 2.2892 - val_accuracy: 0.2405 - 21s/epoch - 3ms/step
+Epoch 59/100
+6250/6250 - 21s - loss: 2.2937 - accuracy: 0.2364 - val_loss: 2.2784 - val_accuracy: 0.2398 - 21s/epoch - 3ms/step
+Epoch 60/100
+6250/6250 - 21s - loss: 2.2795 - accuracy: 0.2347 - val_loss: 2.2773 - val_accuracy: 0.2347 - 21s/epoch - 3ms/step
+Epoch 61/100
+6250/6250 - 21s - loss: 2.2664 - accuracy: 0.2359 - val_loss: 2.2488 - val_accuracy: 0.2465 - 21s/epoch - 3ms/step
+Epoch 62/100
+6250/6250 - 21s - loss: 2.2550 - accuracy: 0.2350 - val_loss: 2.2375 - val_accuracy: 0.2485 - 21s/epoch - 3ms/step
+Epoch 63/100
+6250/6250 - 21s - loss: 2.2422 - accuracy: 0.2371 - val_loss: 2.2351 - val_accuracy: 0.2365 - 21s/epoch - 3ms/step
+Epoch 64/100
+6250/6250 - 20s - loss: 2.2287 - accuracy: 0.2401 - val_loss: 2.2083 - val_accuracy: 0.2484 - 20s/epoch - 3ms/step
+Epoch 65/100
+6250/6250 - 21s - loss: 2.2189 - accuracy: 0.2400 - val_loss: 2.2045 - val_accuracy: 0.2499 - 21s/epoch - 3ms/step
+Epoch 66/100
+6250/6250 - 21s - loss: 2.2091 - accuracy: 0.2393 - val_loss: 2.1909 - val_accuracy: 0.2506 - 21s/epoch - 3ms/step
+Epoch 67/100
+6250/6250 - 21s - loss: 2.1984 - accuracy: 0.2395 - val_loss: 2.1877 - val_accuracy: 0.2503 - 21s/epoch - 3ms/step
+Epoch 68/100
+6250/6250 - 21s - loss: 2.1892 - accuracy: 0.2454 - val_loss: 2.1737 - val_accuracy: 0.2513 - 21s/epoch - 3ms/step
+Epoch 69/100
+6250/6250 - 21s - loss: 2.1799 - accuracy: 0.2448 - val_loss: 2.1654 - val_accuracy: 0.2529 - 21s/epoch - 3ms/step
+Epoch 70/100
+6250/6250 - 21s - loss: 2.1720 - accuracy: 0.2437 - val_loss: 2.1580 - val_accuracy: 0.2522 - 21s/epoch - 3ms/step
+Epoch 71/100
+6250/6250 - 21s - loss: 2.1616 - accuracy: 0.2463 - val_loss: 2.1485 - val_accuracy: 0.2533 - 21s/epoch - 3ms/step
+Epoch 72/100
+6250/6250 - 21s - loss: 2.1568 - accuracy: 0.2450 - val_loss: 2.1415 - val_accuracy: 0.2559 - 21s/epoch - 3ms/step
+Epoch 73/100
+6250/6250 - 21s - loss: 2.1450 - accuracy: 0.2478 - val_loss: 2.1367 - val_accuracy: 0.2584 - 21s/epoch - 3ms/step
+Epoch 74/100
+6250/6250 - 21s - loss: 2.1406 - accuracy: 0.2509 - val_loss: 2.1280 - val_accuracy: 0.2544 - 21s/epoch - 3ms/step
+Epoch 75/100
+6250/6250 - 21s - loss: 2.1335 - accuracy: 0.2483 - val_loss: 2.1192 - val_accuracy: 0.2528 - 21s/epoch - 3ms/step
+Epoch 76/100
+6250/6250 - 21s - loss: 2.1256 - accuracy: 0.2480 - val_loss: 2.1257 - val_accuracy: 0.2562 - 21s/epoch - 3ms/step
+Epoch 77/100
+6250/6250 - 21s - loss: 2.1208 - accuracy: 0.2466 - val_loss: 2.1161 - val_accuracy: 0.2549 - 21s/epoch - 3ms/step
+Epoch 78/100
+6250/6250 - 21s - loss: 2.1124 - accuracy: 0.2505 - val_loss: 2.1155 - val_accuracy: 0.2575 - 21s/epoch - 3ms/step
+Epoch 79/100
+6250/6250 - 20s - loss: 2.1071 - accuracy: 0.2487 - val_loss: 2.0922 - val_accuracy: 0.2659 - 20s/epoch - 3ms/step
+Epoch 80/100
+6250/6250 - 20s - loss: 2.1003 - accuracy: 0.2510 - val_loss: 2.0883 - val_accuracy: 0.2586 - 20s/epoch - 3ms/step
+Epoch 81/100
+6250/6250 - 21s - loss: 2.0941 - accuracy: 0.2545 - val_loss: 2.0860 - val_accuracy: 0.2630 - 21s/epoch - 3ms/step
+Epoch 82/100
+6250/6250 - 21s - loss: 2.0905 - accuracy: 0.2503 - val_loss: 2.0778 - val_accuracy: 0.2629 - 21s/epoch - 3ms/step
+Epoch 83/100
+6250/6250 - 21s - loss: 2.0845 - accuracy: 0.2543 - val_loss: 2.0751 - val_accuracy: 0.2580 - 21s/epoch - 3ms/step
+Epoch 84/100
+6250/6250 - 21s - loss: 2.0790 - accuracy: 0.2579 - val_loss: 2.0728 - val_accuracy: 0.2587 - 21s/epoch - 3ms/step
+Epoch 85/100
+6250/6250 - 21s - loss: 2.0735 - accuracy: 0.2548 - val_loss: 2.0713 - val_accuracy: 0.2668 - 21s/epoch - 3ms/step
+Epoch 86/100
+6250/6250 - 21s - loss: 2.0711 - accuracy: 0.2551 - val_loss: 2.0627 - val_accuracy: 0.2707 - 21s/epoch - 3ms/step
+Epoch 87/100
+6250/6250 - 21s - loss: 2.0626 - accuracy: 0.2588 - val_loss: 2.0535 - val_accuracy: 0.2762 - 21s/epoch - 3ms/step
+Epoch 88/100
+6250/6250 - 21s - loss: 2.0600 - accuracy: 0.2586 - val_loss: 2.0609 - val_accuracy: 0.2669 - 21s/epoch - 3ms/step
+Epoch 89/100
+6250/6250 - 21s - loss: 2.0545 - accuracy: 0.2596 - val_loss: 2.0455 - val_accuracy: 0.2759 - 21s/epoch - 3ms/step
+Epoch 90/100
+6250/6250 - 21s - loss: 2.0558 - accuracy: 0.2583 - val_loss: 2.0557 - val_accuracy: 0.2712 - 21s/epoch - 3ms/step
+Epoch 91/100

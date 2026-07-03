@@ -1,0 +1,161 @@
+Running rolling chunk 1/40
+Array task 2/10: dataset=cifar10, seed=96
+Completed before chunk: 0/1000
+Budget: chunk_evals=25, epochs=100
+Result dir=results_BANANAS_rolling/bananas_cifar10_seed96_e1000_ep100
+[exp_config] Created config.yaml at: /hpc/home/fresca/EDGE-DNNTuner/results_BANANAS_rolling/bananas_cifar10_seed96_e1000_ep100/config.yaml
+50000 train samples
+10000 test samples
+Initialized NeuralNetwork with dataset. ROI mode: False
+FLOPS module weight: 0.3
+
+STARTING BANANAS BASELINE
+
+[INFO] Resume requested, but no previous BANANAS history was found. Starting fresh.
+
+--- BANANAS ITERATION 1 / 1000 ---
+Chosen point: {'num_neurons': 8, 'unit_c1': 3, 'unit_c2': 5, 'dr_f': 0.4141006253868248, 'learning_rate': 0.0009134924272615968, 'batch_size': 32, 'optimizer': 'Adam', 'activation': 'relu', 'data_augmentation': True, 'reg_l2': True, 'skip_connection': False, 'new_fc_1': 17, 'new_fc_2': 3, 'new_fc_3': 26, 'new_fc_4': 15, 'new_fc_5': 24, 'new_fc_6': 20, 'new_fc_7': 21, 'new_fc_8': 12, 'new_fc_9': 8, 'new_fc_10': 1}
+[94m
+|  --> START TRAINING ITERATION 0[0m
+[INFO] Flags -> DA: True, L2: True, Skip: False
+Building model with input_shape=(32, 32, 3), pos_input_shape=None, layer_x_block=2
+Model: "model"
+_________________________________________________________________
+ Layer (type)                Output Shape              Param #   
+=================================================================
+ input_2 (InputLayer)        [(None, 32, 32, 3)]       0         
+                                                                 
+ conv2d (Conv2D)             (None, 32, 32, 24)        672       
+                                                                 
+ activation (Activation)     (None, 32, 32, 24)        0         
+                                                                 
+ conv2d_1 (Conv2D)           (None, 32, 32, 24)        5208      
+                                                                 
+ activation_1 (Activation)   (None, 32, 32, 24)        0         
+                                                                 
+ max_pooling2d (MaxPooling2  (None, 16, 16, 24)        0         
+ D)                                                              
+                                                                 
+ conv2d_2 (Conv2D)           (None, 16, 16, 40)        8680      
+                                                                 
+ activation_2 (Activation)   (None, 16, 16, 40)        0         
+                                                                 
+ conv2d_3 (Conv2D)           (None, 16, 16, 40)        14440     
+                                                                 
+ activation_3 (Activation)   (None, 16, 16, 40)        0         
+                                                                 
+ max_pooling2d_1 (MaxPoolin  (None, 8, 8, 40)          0         
+ g2D)                                                            
+                                                                 
+ flatten (Flatten)           (None, 2560)              0         
+                                                                 
+ dense (Dense)               (None, 136)               348296    
+                                                                 
+ activation_4 (Activation)   (None, 136)               0         
+                                                                 
+ dropout (Dropout)           (None, 136)               0         
+                                                                 
+ dense_1 (Dense)             (None, 24)                3288      
+                                                                 
+ activation_5 (Activation)   (None, 24)                0         
+                                                                 
+ dropout_1 (Dropout)         (None, 24)                0         
+                                                                 
+ dense_2 (Dense)             (None, 208)               5200      
+                                                                 
+ activation_6 (Activation)   (None, 208)               0         
+                                                                 
+ dropout_2 (Dropout)         (None, 208)               0         
+                                                                 
+ dense_3 (Dense)             (None, 120)               25080     
+                                                                 
+ activation_7 (Activation)   (None, 120)               0         
+                                                                 
+ dropout_3 (Dropout)         (None, 120)               0         
+                                                                 
+ dense_4 (Dense)             (None, 192)               23232     
+                                                                 
+ activation_8 (Activation)   (None, 192)               0         
+                                                                 
+ dropout_4 (Dropout)         (None, 192)               0         
+                                                                 
+ dense_5 (Dense)             (None, 160)               30880     
+                                                                 
+ activation_9 (Activation)   (None, 160)               0         
+                                                                 
+ dropout_5 (Dropout)         (None, 160)               0         
+                                                                 
+ dense_6 (Dense)             (None, 168)               27048     
+                                                                 
+ activation_10 (Activation)  (None, 168)               0         
+                                                                 
+ dropout_6 (Dropout)         (None, 168)               0         
+                                                                 
+ dense_7 (Dense)             (None, 96)                16224     
+                                                                 
+ activation_11 (Activation)  (None, 96)                0         
+                                                                 
+ dropout_7 (Dropout)         (None, 96)                0         
+                                                                 
+ dense_8 (Dense)             (None, 64)                6208      
+                                                                 
+ activation_12 (Activation)  (None, 64)                0         
+                                                                 
+ dropout_8 (Dropout)         (None, 64)                0         
+                                                                 
+ dense_9 (Dense)             (None, 8)                 520       
+                                                                 
+ activation_13 (Activation)  (None, 8)                 0         
+                                                                 
+ dropout_9 (Dropout)         (None, 8)                 0         
+                                                                 
+ dense_10 (Dense)            (None, 10)                90        
+                                                                 
+=================================================================
+Total params: 515066 (1.96 MB)
+Trainable params: 515066 (1.96 MB)
+Non-trainable params: 0 (0.00 Byte)
+_________________________________________________________________
+Epoch 1/100
+1563/1563 - 10s - loss: 2.6456 - accuracy: 0.0976 - val_loss: 2.3026 - val_accuracy: 0.1000 - 10s/epoch - 7ms/step
+Epoch 2/100
+1563/1563 - 6s - loss: 2.3027 - accuracy: 0.0983 - val_loss: 2.3027 - val_accuracy: 0.1000 - 6s/epoch - 4ms/step
+Epoch 3/100
+1563/1563 - 6s - loss: 2.3028 - accuracy: 0.0987 - val_loss: 2.3026 - val_accuracy: 0.1000 - 6s/epoch - 4ms/step
+Epoch 4/100
+1563/1563 - 6s - loss: 2.3028 - accuracy: 0.0981 - val_loss: 2.3027 - val_accuracy: 0.1000 - 6s/epoch - 4ms/step
+Epoch 5/100
+1563/1563 - 6s - loss: 2.3028 - accuracy: 0.0971 - val_loss: 2.3026 - val_accuracy: 0.1000 - 6s/epoch - 4ms/step
+Epoch 6/100
+1563/1563 - 6s - loss: 2.3028 - accuracy: 0.0979 - val_loss: 2.3026 - val_accuracy: 0.1000 - 6s/epoch - 4ms/step
+Epoch 7/100
+1563/1563 - 6s - loss: 2.3028 - accuracy: 0.0963 - val_loss: 2.3026 - val_accuracy: 0.1000 - 6s/epoch - 4ms/step
+Epoch 8/100
+1563/1563 - 6s - loss: 2.3027 - accuracy: 0.0986 - val_loss: 2.3026 - val_accuracy: 0.1000 - 6s/epoch - 4ms/step
+Epoch 9/100
+1563/1563 - 6s - loss: 2.3028 - accuracy: 0.0978 - val_loss: 2.3026 - val_accuracy: 0.1000 - 6s/epoch - 4ms/step
+Epoch 10/100
+1563/1563 - 6s - loss: 2.3028 - accuracy: 0.0978 - val_loss: 2.3026 - val_accuracy: 0.1000 - 6s/epoch - 4ms/step
+Epoch 11/100
+1563/1563 - 6s - loss: 2.3028 - accuracy: 0.0987 - val_loss: 2.3026 - val_accuracy: 0.1000 - 6s/epoch - 4ms/step
+Epoch 12/100
+1563/1563 - 6s - loss: 2.3028 - accuracy: 0.0979 - val_loss: 2.3026 - val_accuracy: 0.1000 - 6s/epoch - 4ms/step
+Epoch 13/100
+1563/1563 - 6s - loss: 2.3028 - accuracy: 0.0980 - val_loss: 2.3026 - val_accuracy: 0.1000 - 6s/epoch - 4ms/step
+Epoch 14/100
+1563/1563 - 6s - loss: 2.3028 - accuracy: 0.0995 - val_loss: 2.3026 - val_accuracy: 0.1000 - 6s/epoch - 4ms/step
+Epoch 15/100
+1563/1563 - 6s - loss: 2.3028 - accuracy: 0.0968 - val_loss: 2.3026 - val_accuracy: 0.1000 - 6s/epoch - 4ms/step
+Epoch 16/100
+1563/1563 - 6s - loss: 2.3028 - accuracy: 0.0978 - val_loss: 2.3026 - val_accuracy: 0.1000 - 6s/epoch - 4ms/step
+Epoch 17/100
+1563/1563 - 6s - loss: 2.3028 - accuracy: 0.0966 - val_loss: 2.3026 - val_accuracy: 0.1000 - 6s/epoch - 4ms/step
+Epoch 18/100
+1563/1563 - 6s - loss: 2.3028 - accuracy: 0.0962 - val_loss: 2.3026 - val_accuracy: 0.1000 - 6s/epoch - 4ms/step
+Epoch 19/100
+1563/1563 - 6s - loss: 2.3028 - accuracy: 0.1000 - val_loss: 2.3026 - val_accuracy: 0.1000 - 6s/epoch - 4ms/step
+Epoch 20/100
+1563/1563 - 6s - loss: 2.3027 - accuracy: 0.0992 - val_loss: 2.3027 - val_accuracy: 0.1000 - 6s/epoch - 4ms/step
+Epoch 21/100
+1563/1563 - 6s - loss: 2.3028 - accuracy: 0.0981 - val_loss: 2.3026 - val_accuracy: 0.1000 - 6s/epoch - 4ms/step
+Epoch 22/100

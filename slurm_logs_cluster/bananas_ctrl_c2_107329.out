@@ -1,0 +1,4 @@
+BANANAS CPU controller running chunk 2/40
+Submitting one GPU array with 10 tasks and max parallel 3
+Submitted GPU chunk array 107330 for chunk 2/40
+Submitted next CPU controller 107331, dependent on GPU array 107330

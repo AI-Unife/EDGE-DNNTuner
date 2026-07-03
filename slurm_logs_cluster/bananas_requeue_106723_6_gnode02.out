@@ -1,0 +1,235 @@
+BANANAS requeue array task 6/10
+Dataset=cifar100 Seed=123
+Completed before chunk: 0/1000
+Chunk budget: 2 new evals, epochs=100
+Result dir=results_BANANAS_requeue/bananas_cifar100_seed123_e1000_ep100
+[exp_config] Created config.yaml at: /hpc/home/fresca/EDGE-DNNTuner/results_BANANAS_requeue/bananas_cifar100_seed123_e1000_ep100/config.yaml
+50000 train samples
+10000 test samples
+Initialized NeuralNetwork with dataset. ROI mode: False
+FLOPS module weight: 0.3
+
+STARTING BANANAS BASELINE
+
+[INFO] Resume requested, but no previous BANANAS history was found. Starting fresh.
+
+--- BANANAS ITERATION 1 / 1000 ---
+Chosen point: {'num_neurons': 32, 'unit_c1': 3, 'unit_c2': 3, 'dr_f': 0.13662018317517546, 'learning_rate': 0.0005961832921746022, 'batch_size': 32, 'optimizer': 'SGD', 'activation': 'swish', 'data_augmentation': True, 'reg_l2': False, 'skip_connection': False, 'new_fc_1': 32, 'new_fc_2': 25, 'new_fc_3': 19, 'new_fc_4': 14, 'new_fc_5': 32, 'new_fc_6': 16, 'new_fc_7': 4, 'new_fc_8': 3, 'new_fc_9': 2, 'new_fc_10': 20}
+[94m
+|  --> START TRAINING ITERATION 0[0m
+[INFO] Flags -> DA: True, L2: False, Skip: False
+Building model with input_shape=(32, 32, 3), pos_input_shape=None, layer_x_block=2
+Model: "model"
+_________________________________________________________________
+ Layer (type)                Output Shape              Param #   
+=================================================================
+ input_2 (InputLayer)        [(None, 32, 32, 3)]       0         
+                                                                 
+ conv2d (Conv2D)             (None, 32, 32, 96)        2688      
+                                                                 
+ activation (Activation)     (None, 32, 32, 96)        0         
+                                                                 
+ conv2d_1 (Conv2D)           (None, 32, 32, 96)        83040     
+                                                                 
+ activation_1 (Activation)   (None, 32, 32, 96)        0         
+                                                                 
+ max_pooling2d (MaxPooling2  (None, 16, 16, 96)        0         
+ D)                                                              
+                                                                 
+ conv2d_2 (Conv2D)           (None, 16, 16, 96)        83040     
+                                                                 
+ activation_2 (Activation)   (None, 16, 16, 96)        0         
+                                                                 
+ conv2d_3 (Conv2D)           (None, 16, 16, 96)        83040     
+                                                                 
+ activation_3 (Activation)   (None, 16, 16, 96)        0         
+                                                                 
+ max_pooling2d_1 (MaxPoolin  (None, 8, 8, 96)          0         
+ g2D)                                                            
+                                                                 
+ flatten (Flatten)           (None, 6144)              0         
+                                                                 
+ dense (Dense)               (None, 1024)              6292480   
+                                                                 
+ activation_4 (Activation)   (None, 1024)              0         
+                                                                 
+ dropout (Dropout)           (None, 1024)              0         
+                                                                 
+ dense_1 (Dense)             (None, 800)               820000    
+                                                                 
+ activation_5 (Activation)   (None, 800)               0         
+                                                                 
+ dropout_1 (Dropout)         (None, 800)               0         
+                                                                 
+ dense_2 (Dense)             (None, 608)               487008    
+                                                                 
+ activation_6 (Activation)   (None, 608)               0         
+                                                                 
+ dropout_2 (Dropout)         (None, 608)               0         
+                                                                 
+ dense_3 (Dense)             (None, 448)               272832    
+                                                                 
+ activation_7 (Activation)   (None, 448)               0         
+                                                                 
+ dropout_3 (Dropout)         (None, 448)               0         
+                                                                 
+ dense_4 (Dense)             (None, 1024)              459776    
+                                                                 
+ activation_8 (Activation)   (None, 1024)              0         
+                                                                 
+ dropout_4 (Dropout)         (None, 1024)              0         
+                                                                 
+ dense_5 (Dense)             (None, 512)               524800    
+                                                                 
+ activation_9 (Activation)   (None, 512)               0         
+                                                                 
+ dropout_5 (Dropout)         (None, 512)               0         
+                                                                 
+ dense_6 (Dense)             (None, 128)               65664     
+                                                                 
+ activation_10 (Activation)  (None, 128)               0         
+                                                                 
+ dropout_6 (Dropout)         (None, 128)               0         
+                                                                 
+ dense_7 (Dense)             (None, 96)                12384     
+                                                                 
+ activation_11 (Activation)  (None, 96)                0         
+                                                                 
+ dropout_7 (Dropout)         (None, 96)                0         
+                                                                 
+ dense_8 (Dense)             (None, 64)                6208      
+                                                                 
+ activation_12 (Activation)  (None, 64)                0         
+                                                                 
+ dropout_8 (Dropout)         (None, 64)                0         
+                                                                 
+ dense_9 (Dense)             (None, 640)               41600     
+                                                                 
+ activation_13 (Activation)  (None, 640)               0         
+                                                                 
+ dropout_9 (Dropout)         (None, 640)               0         
+                                                                 
+ dense_10 (Dense)            (None, 100)               64100     
+                                                                 
+=================================================================
+Total params: 9298660 (35.47 MB)
+Trainable params: 9298660 (35.47 MB)
+Non-trainable params: 0 (0.00 Byte)
+_________________________________________________________________
+[WARNING] Constraint Violated: FLOPs 279071992 > 150000000 or Params 9298660.0 > 15000000000
+
+ACCURACY: 0.0
+
+
+SCORE: 10000000000.0
+
+[92m | MODULE VALUES ---------------------------------------------  |
+ [0m
+FLOPS: 279071992
+PARAMS: 9298660.0
+[92m 
+ | -----------------------------------------------------------  |
+ [0m
+
+--- BANANAS ITERATION 2 / 1000 ---
+Chosen point: {'num_neurons': 16, 'unit_c1': 1, 'unit_c2': 8, 'dr_f': 0.3281684505191209, 'learning_rate': 0.0008644886146700107, 'batch_size': 32, 'optimizer': 'Adagrad', 'activation': 'selu', 'data_augmentation': False, 'reg_l2': False, 'skip_connection': False, 'new_fc_1': 12, 'new_fc_2': 3, 'new_fc_3': 5, 'new_fc_4': 0, 'new_fc_5': 11, 'new_fc_6': 10, 'new_fc_7': 22, 'new_fc_8': 13, 'new_fc_9': 18, 'new_fc_10': 15}
+[94m
+|  --> START TRAINING ITERATION 1[0m
+[INFO] Flags -> DA: False, L2: False, Skip: False
+Building model with input_shape=(32, 32, 3), pos_input_shape=None, layer_x_block=2
+Model: "model"
+_________________________________________________________________
+ Layer (type)                Output Shape              Param #   
+=================================================================
+ input_1 (InputLayer)        [(None, 32, 32, 3)]       0         
+                                                                 
+ conv2d (Conv2D)             (None, 32, 32, 16)        448       
+                                                                 
+ activation (Activation)     (None, 32, 32, 16)        0         
+                                                                 
+ conv2d_1 (Conv2D)           (None, 32, 32, 16)        2320      
+                                                                 
+ activation_1 (Activation)   (None, 32, 32, 16)        0         
+                                                                 
+ max_pooling2d (MaxPooling2  (None, 16, 16, 16)        0         
+ D)                                                              
+                                                                 
+ conv2d_2 (Conv2D)           (None, 16, 16, 128)       18560     
+                                                                 
+ activation_2 (Activation)   (None, 16, 16, 128)       0         
+                                                                 
+ conv2d_3 (Conv2D)           (None, 16, 16, 128)       147584    
+                                                                 
+ activation_3 (Activation)   (None, 16, 16, 128)       0         
+                                                                 
+ max_pooling2d_1 (MaxPoolin  (None, 8, 8, 128)         0         
+ g2D)                                                            
+                                                                 
+ flatten (Flatten)           (None, 8192)              0         
+                                                                 
+ dense (Dense)               (None, 192)               1573056   
+                                                                 
+ activation_4 (Activation)   (None, 192)               0         
+                                                                 
+ dropout (Dropout)           (None, 192)               0         
+                                                                 
+ dense_1 (Dense)             (None, 48)                9264      
+                                                                 
+ activation_5 (Activation)   (None, 48)                0         
+                                                                 
+ dropout_1 (Dropout)         (None, 48)                0         
+                                                                 
+ dense_2 (Dense)             (None, 80)                3920      
+                                                                 
+ activation_6 (Activation)   (None, 80)                0         
+                                                                 
+ dropout_2 (Dropout)         (None, 80)                0         
+                                                                 
+ dense_3 (Dense)             (None, 176)               14256     
+                                                                 
+ activation_7 (Activation)   (None, 176)               0         
+                                                                 
+ dropout_3 (Dropout)         (None, 176)               0         
+                                                                 
+ dense_4 (Dense)             (None, 160)               28320     
+                                                                 
+ activation_8 (Activation)   (None, 160)               0         
+                                                                 
+ dropout_4 (Dropout)         (None, 160)               0         
+                                                                 
+ dense_5 (Dense)             (None, 352)               56672     
+                                                                 
+ activation_9 (Activation)   (None, 352)               0         
+                                                                 
+ dropout_5 (Dropout)         (None, 352)               0         
+                                                                 
+ dense_6 (Dense)             (None, 208)               73424     
+                                                                 
+ activation_10 (Activation)  (None, 208)               0         
+                                                                 
+ dropout_6 (Dropout)         (None, 208)               0         
+                                                                 
+ dense_7 (Dense)             (None, 288)               60192     
+                                                                 
+ activation_11 (Activation)  (None, 288)               0         
+                                                                 
+ dropout_7 (Dropout)         (None, 288)               0         
+                                                                 
+ dense_8 (Dense)             (None, 240)               69360     
+                                                                 
+ activation_12 (Activation)  (None, 240)               0         
+                                                                 
+ dropout_8 (Dropout)         (None, 240)               0         
+                                                                 
+ dense_9 (Dense)             (None, 100)               24100     
+                                                                 
+=================================================================
+Total params: 2081476 (7.94 MB)
+Trainable params: 2081476 (7.94 MB)
+Non-trainable params: 0 (0.00 Byte)
+_________________________________________________________________
+Epoch 1/100
+1563/1563 - 11s - loss: 5.6941 - accuracy: 0.0109 - val_loss: 4.4223 - val_accuracy: 0.0421 - 11s/epoch - 7ms/step
+Epoch 2/100
+1563/1563 - 6s - loss: 5.1264 - accuracy: 0.0149 - val_loss: 4.3101 - val_accuracy: 0.0541 - 6s/epoch - 4ms/step
+Epoch 3/100

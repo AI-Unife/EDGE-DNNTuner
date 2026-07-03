@@ -1,0 +1,4 @@
+Running BANANAS resume chunk 1/500
+Array task 0/10: dataset=cifar10, seed=42
+Budget: total_evals=1000, chunk_evals=2, epochs=100
+Result dir=results_BANANAS_resume/bananas_cifar10_seed42_e1000_ep100

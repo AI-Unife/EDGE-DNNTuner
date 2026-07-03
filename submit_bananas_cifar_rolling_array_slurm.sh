@@ -106,10 +106,24 @@ if [[ "${BANANAS_ROLLING_WORKER:-0}" == "1" ]]; then
   echo "Budget: chunk_evals=${CHUNK_EVALS}, epochs=${EPOCHS}"
   echo "Result dir=${RESULTS_DIR}/${NAME_EXP}"
 
+  CHUNK_TARGET=$((CHUNK * CHUNK_EVALS))
+  if (( CHUNK_TARGET > TOTAL_EVALS )); then
+    CHUNK_TARGET="$TOTAL_EVALS"
+  fi
+  REMAINING_FOR_CHUNK=$((CHUNK_TARGET - COMPLETED_BEFORE))
+
   if (( COMPLETED_BEFORE >= TOTAL_EVALS )); then
     echo "Run already complete. Nothing to do."
     exit 0
   fi
+  if (( REMAINING_FOR_CHUNK <= 0 )); then
+    echo "Chunk target already reached: ${COMPLETED_BEFORE}/${CHUNK_TARGET}. Nothing to do."
+    exit 0
+  fi
+  if (( REMAINING_FOR_CHUNK > CHUNK_EVALS )); then
+    REMAINING_FOR_CHUNK="$CHUNK_EVALS"
+  fi
+  echo "This task will run ${REMAINING_FOR_CHUNK} new eval(s) to reach chunk target ${CHUNK_TARGET}/${TOTAL_EVALS}."
 
   export HF_DATASETS_CACHE
 
@@ -125,7 +139,7 @@ if [[ "${BANANAS_ROLLING_WORKER:-0}" == "1" ]]; then
     --epochs "$EPOCHS" \
     --mod_list flops_module \
     --resume \
-    --max_new_evals "$CHUNK_EVALS"
+    --max_new_evals "$REMAINING_FOR_CHUNK"
 
   COMPLETED_AFTER=$(history_count "$HISTORY_PATH")
   echo "Completed after chunk: ${COMPLETED_AFTER}/${TOTAL_EVALS}"
