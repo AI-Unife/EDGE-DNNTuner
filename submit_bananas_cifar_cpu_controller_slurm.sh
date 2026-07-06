@@ -9,6 +9,7 @@ JOB_SETUP="${JOB_SETUP:-module load cuda/12.2}"
 CONTROLLER_PARTITION="${CONTROLLER_PARTITION:-cpu_amd_default}"
 CONTROLLER_TIME="${CONTROLLER_TIME:-00:10:00}"
 CONTROLLER_MEMORY="${CONTROLLER_MEMORY:-1G}"
+CONTROLLER_DEPENDENCY="${CONTROLLER_DEPENDENCY:-afterany}"
 
 # GPU worker arrays.
 PARTITION="${PARTITION:-gpu_H100_partitioned}"
@@ -99,7 +100,7 @@ DATASETS_LIST="${DATASETS[*]}"
 SEEDS_LIST="${SEEDS[*]}"
 export CONDA_ENV PYTHON_BIN JOB_SETUP PARTITION GPUS MEMORY QOS TIME_LIMIT
 export TOTAL_EVALS CHUNK_EVALS EPOCHS MAX_PARALLEL RESULTS_DIR SLURM_LOG_DIR HF_DATASETS_CACHE
-export DATASETS_LIST SEEDS_LIST CONTROLLER_PARTITION CONTROLLER_TIME CONTROLLER_MEMORY START_CHUNK
+export DATASETS_LIST SEEDS_LIST CONTROLLER_PARTITION CONTROLLER_TIME CONTROLLER_MEMORY CONTROLLER_DEPENDENCY START_CHUNK
 
 if [[ "${BANANAS_CONTROLLER_WORKER:-0}" != "1" ]]; then
   controller_job_id=$(sbatch --parsable \
@@ -144,14 +145,14 @@ if (( next_chunk <= CHUNKS )); then
   next_controller_job_id=$(START_CHUNK="$next_chunk" sbatch --parsable \
     --job-name="bananas_ctrl_c${next_chunk}" \
     --partition="$CONTROLLER_PARTITION" \
-    --dependency="afterok:${gpu_job_id}" \
+    --dependency="${CONTROLLER_DEPENDENCY}:${gpu_job_id}" \
     --mem="$CONTROLLER_MEMORY" \
     --time="$CONTROLLER_TIME" \
     --output="${SLURM_LOG_DIR}/%x_%j.out" \
     --error="${SLURM_LOG_DIR}/%x_%j.err" \
     --export="ALL,BANANAS_CONTROLLER_WORKER=1,START_CHUNK=${next_chunk}" \
     "$0")
-  echo "Submitted next CPU controller ${next_controller_job_id}, dependent on GPU array ${gpu_job_id}"
+  echo "Submitted next CPU controller ${next_controller_job_id}, dependent on GPU array ${gpu_job_id} with ${CONTROLLER_DEPENDENCY}"
 else
   echo "Last chunk submitted. No next controller needed."
 fi
