@@ -19,9 +19,6 @@ SURROGATE="${SURROGATE:-GP}"
 BETA="${BETA:-1.0}"
 CANDIDATE_POOL="${CANDIDATE_POOL:-512}"
 INIT_RANDOM="${INIT_RANDOM:-10}"
-ACCURACY_COST="${ACCURACY_COST:-1.0}"
-FLOPS_COST="${FLOPS_COST:-0.05}"
-FLOPS_SCALE="${FLOPS_SCALE:-}"
 
 RESULTS_DIR="${RESULTS_DIR:-results_FLEXIBO_rolling}"
 SLURM_LOG_DIR="${SLURM_LOG_DIR:-slurm_logs}"
@@ -61,7 +58,13 @@ history_count() {
     echo 0
     return
   fi
-  awk -F, 'NR > 1 && ($3 == "accuracy" || $3 == "both") {count++} END {print count + 0}' "$history_path"
+  local lines
+  lines=$(wc -l < "$history_path")
+  if (( lines <= 1 )); then
+    echo 0
+  else
+    echo $((lines - 1))
+  fi
 }
 
 validate_partitions
@@ -100,7 +103,7 @@ if [[ "${FLEXIBO_ROLLING_WORKER:-0}" == "1" ]]; then
   echo "Running FlexiBO rolling chunk ${CHUNK}/${CHUNKS}"
   echo "Array task ${TASK_ID}/${TASK_COUNT}: dataset=${DATA}, seed=${SEED}"
   echo "Completed before chunk: ${COMPLETED_BEFORE}/${TOTAL_EVALS}"
-  echo "Budget: chunk_accuracy_evals=${CHUNK_EVALS}, epochs=${EPOCHS}, surrogate=${SURROGATE}"
+  echo "Budget: chunk_evals=${CHUNK_EVALS}, epochs=${EPOCHS}, surrogate=${SURROGATE}"
   echo "Result dir=${RESULTS_DIR}/${NAME_EXP}"
 
   CHUNK_TARGET=$((CHUNK * CHUNK_EVALS))
@@ -128,11 +131,6 @@ if [[ "${FLEXIBO_ROLLING_WORKER:-0}" == "1" ]]; then
     eval "$JOB_SETUP"
   fi
 
-  flops_scale_args=()
-  if [[ -n "$FLOPS_SCALE" ]]; then
-    flops_scale_args=(--flops_scale "$FLOPS_SCALE")
-  fi
-
   ${PYTHON_BIN} flexibo_runner.py \
     --name "${RESULTS_DIR}/${NAME_EXP}" \
     --dataset "$DATA" \
@@ -145,10 +143,7 @@ if [[ "${FLEXIBO_ROLLING_WORKER:-0}" == "1" ]]; then
     --surrogate "$SURROGATE" \
     --beta "$BETA" \
     --candidate_pool "$CANDIDATE_POOL" \
-    --init_random "$INIT_RANDOM" \
-    --accuracy_cost "$ACCURACY_COST" \
-    --flops_cost "$FLOPS_COST" \
-    "${flops_scale_args[@]}"
+    --init_random "$INIT_RANDOM"
 
   COMPLETED_AFTER=$(history_count "$HISTORY_PATH")
   echo "Completed after chunk: ${COMPLETED_AFTER}/${TOTAL_EVALS}"
@@ -160,7 +155,6 @@ SEEDS_LIST="${SEEDS[*]}"
 export CONDA_ENV PYTHON_BIN JOB_SETUP PARTITION GPUS MEMORY QOS TIME_LIMIT
 export TOTAL_EVALS CHUNK_EVALS EPOCHS MAX_PARALLEL RESULTS_DIR SLURM_LOG_DIR HF_DATASETS_CACHE
 export DATASETS_LIST SEEDS_LIST SURROGATE BETA CANDIDATE_POOL INIT_RANDOM
-export ACCURACY_COST FLOPS_COST FLOPS_SCALE
 
 base_sbatch_args=(
   --partition="$PARTITION"

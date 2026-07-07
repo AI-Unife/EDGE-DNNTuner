@@ -21,52 +21,15 @@ except ModuleNotFoundError as exc:
         "BANANAS experiments: pip install -r requirements.txt"
     ) from exc
 
-NASZILLA_PATH = Path(__file__).resolve().parent / "othertunerdependencies" / "bananas" / "naszilla"
-if NASZILLA_PATH.is_dir():
-    sys.path.insert(0, str(NASZILLA_PATH))
-
-try:
-    from naszilla.acquisition_functions import acq_fn
-    import naszilla.meta_neural_net as naszilla_meta_neural_net
-    from naszilla.meta_neural_net import MetaNeuralnet
-except ModuleNotFoundError as exc:
-    raise SystemExit(
-        "Missing NASzilla dependency. Initialize it with: "
-        "git submodule update --init --recursive othertunerdependencies/bananas/naszilla"
-    ) from exc
-
 from components.controller import controller
 from components.objFunction import ObjectiveWrapper
 from components.search_space import search_space
 from exp_config import create_config_file, load_cfg, set_active_config
 
-_KERAS_ADAM_PATCHED = False
-
-
-def patch_keras_adam_lr_alias() -> None:
-    """
-    NASzilla's MetaNeuralnet calls keras.optimizers.Adam(lr=...).
-    Keras 3 removed that alias, so keep NASzilla code untouched and provide a
-    narrow compatibility wrapper at runtime.
-    """
-    global _KERAS_ADAM_PATCHED
-    if _KERAS_ADAM_PATCHED:
-        return
-
-    original_adam = naszilla_meta_neural_net.keras.optimizers.Adam
-
-    def adam_with_lr_alias(*args, **kwargs):
-        if "lr" in kwargs and "learning_rate" not in kwargs:
-            kwargs["learning_rate"] = kwargs.pop("lr")
-        return original_adam(*args, **kwargs)
-
-    naszilla_meta_neural_net.keras.optimizers.Adam = adam_with_lr_alias
-    _KERAS_ADAM_PATCHED = True
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run BANANAS using the NASzilla predictor/acquisition on the project RS search space."
+        description="Run a BANANAS-style NAS baseline on the project search space."
     )
     parser.add_argument("--backend", type=str, default="tf", choices=["tf", "torch"])
     parser.add_argument("--eval", type=int, default=1000, help="Number of architectures to evaluate")
@@ -91,15 +54,9 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--init_random", type=int, default=10, help="Random evaluations before fitting predictors")
     parser.add_argument("--candidate_pool", type=int, default=256, help="Candidate architectures scored by acquisition")
-    parser.add_argument("--ensemble_size", type=int, default=5, help="Number of NASzilla meta neural nets")
-    parser.add_argument("--predictor_epochs", type=int, default=200, help="Training epochs for each NASzilla predictor")
-    parser.add_argument("--explore_type", type=str, default="its", choices=["ucb", "ei", "pi", "ts", "percentile", "mean", "confidence", "its"])
-    parser.add_argument("--metann_num_layers", type=int, default=10)
-    parser.add_argument("--metann_layer_width", type=int, default=20)
-    parser.add_argument("--metann_lr", type=float, default=0.01)
-    parser.add_argument("--metann_loss", type=str, default="mae", choices=["mae", "mape"])
-    parser.add_argument("--metann_batch_size", type=int, default=32)
-    parser.add_argument("--metann_regularization", type=float, default=0.0)
+    parser.add_argument("--ensemble_size", type=int, default=5, help="Number of neural predictors")
+    parser.add_argument("--predictor_epochs", type=int, default=80, help="Training epochs for each predictor")
+    parser.add_argument("--acq_beta", type=float, default=0.5, help="Exploration weight in LCB acquisition")
     parser.add_argument(
         "--mutation_parents",
         type=int,
@@ -227,46 +184,76 @@ def json_params(space: Space, point: Sequence[Any]) -> str:
     return json.dumps(params, sort_keys=True)
 
 
-class EdgeDNNTunerBananasAdapter:
+class BananasOptimizer:
     """
-    Adapter exposing the EDGE-DNN Tuner RS space with BANANAS/NASzilla semantics.
+    Lightweight BANANAS-style optimizer for this project.
 
-    NASzilla's BANANAS expects architectures with an encoding, a mutation
-    operator, and a black-box validation loss. This adapter maps those concepts
-    to skopt points in the RS search space and controller scores.
+    It follows the practical BANANAS loop:
+    1. collect random architecture evaluations;
+    2. encode architectures as vectors;
+    3. train an ensemble of neural predictors;
+    4. score a candidate pool with lower-confidence-bound acquisition;
+    5. evaluate the selected architecture with the real project objective.
     """
 
     def __init__(
         self,
         space: Space,
         seed: int,
+        init_random: int,
         candidate_pool: int,
+        ensemble_size: int,
+        predictor_epochs: int,
+        acq_beta: float,
         mutation_parents: int,
         mutation_attempts: int,
         random_candidate_fraction: float,
     ) -> None:
         self.space = space
         self.rng = np.random.RandomState(seed)
+        self.seed = seed
+        self.init_random = max(1, init_random)
         self.candidate_pool = max(1, candidate_pool)
+        self.ensemble_size = max(1, ensemble_size)
+        self.predictor_epochs = max(1, predictor_epochs)
+        self.acq_beta = acq_beta
         self.mutation_parents = max(1, mutation_parents)
         self.mutation_attempts = max(1, mutation_attempts)
         self.random_candidate_fraction = min(1.0, max(0.0, random_candidate_fraction))
-        self.data: List[Dict[str, Any]] = []
+        self.points: List[List[Any]] = []
+        self.scores: List[float] = []
         self.seen = set()
 
+    def ask(self) -> List[Any]:
+        if len(self.points) < self.init_random:
+            return self._sample_unseen()
+
+        candidates = self._sample_candidate_pool()
+        encoded_train = np.asarray([self.encode(point) for point in self.points], dtype=np.float32)
+        y = np.asarray(self.scores, dtype=np.float32)
+        encoded_candidates = np.asarray([self.encode(point) for point in candidates], dtype=np.float32)
+        predictions = self._predict_with_ensemble(encoded_train, y, encoded_candidates)
+
+        mean = predictions.mean(axis=0)
+        std = predictions.std(axis=0)
+        acquisition = mean - (self.acq_beta * std)
+        return candidates[int(np.argmin(acquisition))]
+
     def tell(self, point: Sequence[Any], score: float) -> None:
-        arch = self.arch_dict(point=list(point), score=float(score))
-        self.data.append(arch)
+        self.points.append(list(point))
+        self.scores.append(float(score))
         self.seen.add(point_key(point))
 
-    def ask_random(self) -> List[Any]:
+    def _sample_unseen(self) -> List[Any]:
         for _ in range(1000):
             point = self.space.rvs(n_samples=1, random_state=self.rng)[0]
-            if point_key(point) not in self.seen:
+            key = point_key(point)
+            if key not in self.seen:
                 return list(point)
-        return list(self.space.rvs(n_samples=1, random_state=self.rng)[0])
+        point = self.space.rvs(n_samples=1, random_state=self.rng)[0]
+        return list(point)
 
-    def get_candidates(self) -> List[Dict[str, Any]]:
+    def _sample_candidate_pool(self) -> List[List[Any]]:
         candidates: List[List[Any]] = []
         local_seen = set()
         random_budget = int(round(self.candidate_pool * self.random_candidate_fraction))
@@ -288,29 +275,10 @@ class EdgeDNNTunerBananasAdapter:
             local_seen.add(point_key(point))
             candidates.append(point)
 
-        attempts = 0
-        while len(candidates) < self.candidate_pool and attempts < self.candidate_pool * 100:
-            attempts += 1
-            point = self.ask_random()
-            key = point_key(point)
-            if key in local_seen:
-                continue
-            local_seen.add(key)
-            candidates.append(point)
-
         while len(candidates) < self.candidate_pool:
-            candidates.append(self.ask_random())
+            candidates.append(self._sample_unseen())
 
-        return [self.arch_dict(point=point, score=None) for point in candidates]
-
-    def arch_dict(self, point: Sequence[Any], score: float | None) -> Dict[str, Any]:
-        arch = {
-            "spec": list(point),
-            "encoding": self.encode(point),
-        }
-        if score is not None:
-            arch["val_loss"] = float(score)
-        return arch
+        return candidates
 
     def _sample_random_candidate(self, local_seen: set[str]) -> List[Any] | None:
         point = self.space.rvs(n_samples=1, random_state=self.rng)[0]
@@ -334,12 +302,12 @@ class EdgeDNNTunerBananasAdapter:
 
     def _mutation_parents(self) -> List[List[Any]]:
         valid = [
-            (arch["val_loss"], arch["spec"])
-            for arch in self.data
-            if "val_loss" in arch and math.isfinite(float(arch["val_loss"])) and abs(float(arch["val_loss"])) < 1e9
+            (score, point)
+            for score, point in zip(self.scores, self.points)
+            if math.isfinite(score) and abs(score) < 1e9
         ]
         if not valid:
-            valid = [(arch.get("val_loss", 1e10), arch["spec"]) for arch in self.data]
+            valid = list(zip(self.scores, self.points))
         valid.sort(key=lambda item: item[0])
         return [list(point) for _, point in valid[: self.mutation_parents]]
 
@@ -351,7 +319,7 @@ class EdgeDNNTunerBananasAdapter:
             if self._dimension_has_alternative(dim)
         ]
         if not mutable_indices:
-            return self.ask_random()
+            return self._sample_unseen()
 
         dim_idx = int(self.rng.choice(mutable_indices))
         dim = self.space.dimensions[dim_idx]
@@ -412,77 +380,43 @@ class EdgeDNNTunerBananasAdapter:
                 raise TypeError(f"Unsupported skopt dimension type: {type(dim)}")
         return encoded
 
+    def _predict_with_ensemble(self, x_train: np.ndarray, y: np.ndarray, x_candidates: np.ndarray) -> np.ndarray:
+        try:
+            import tensorflow as tf
+        except ModuleNotFoundError as exc:
+            raise RuntimeError("TensorFlow is required for the BANANAS predictor ensemble.") from exc
 
-class NaszillaBananasOptimizer:
-    def __init__(
-        self,
-        adapter: EdgeDNNTunerBananasAdapter,
-        seed: int,
-        init_random: int,
-        ensemble_size: int,
-        predictor_epochs: int,
-        explore_type: str,
-        metann_num_layers: int,
-        metann_layer_width: int,
-        metann_lr: float,
-        metann_loss: str,
-        metann_batch_size: int,
-        metann_regularization: float,
-    ) -> None:
-        self.adapter = adapter
-        self.seed = seed
-        self.init_random = max(1, init_random)
-        self.ensemble_size = max(1, ensemble_size)
-        self.predictor_epochs = max(1, predictor_epochs)
-        self.explore_type = explore_type
-        self.metann_num_layers = metann_num_layers
-        self.metann_layer_width = metann_layer_width
-        self.metann_lr = metann_lr
-        self.metann_loss = metann_loss
-        self.metann_batch_size = metann_batch_size
-        self.metann_regularization = metann_regularization
-
-    def tell(self, point: Sequence[Any], score: float) -> None:
-        self.adapter.tell(point, score)
-
-    def ask(self) -> List[Any]:
-        if len(self.adapter.data) < self.init_random:
-            return self.adapter.ask_random()
-
-        xtrain = np.asarray([arch["encoding"] for arch in self.adapter.data], dtype=np.float32)
-        ytrain = np.asarray([arch["val_loss"] for arch in self.adapter.data], dtype=np.float32)
-        candidates = self.adapter.get_candidates()
-        xcandidates = np.asarray([candidate["encoding"] for candidate in candidates], dtype=np.float32)
-
+        y_mean = float(y.mean())
+        y_std = float(y.std()) or 1.0
+        y_scaled = (y - y_mean) / y_std
         predictions = []
-        for ensemble_idx in range(self.ensemble_size):
-            np.random.seed(self.seed + ensemble_idx + len(self.adapter.data))
-            patch_keras_adam_lr_alias()
-            predictor = MetaNeuralnet()
-            predictor.fit(
-                xtrain,
-                ytrain,
-                num_layers=self.metann_num_layers,
-                layer_width=self.metann_layer_width,
-                loss=self.metann_loss,
-                epochs=self.predictor_epochs,
-                batch_size=min(self.metann_batch_size, len(xtrain)),
-                lr=self.metann_lr,
-                verbose=0,
-                regularization=self.metann_regularization,
-            )
-            predictions.append(np.squeeze(predictor.predict(xcandidates)))
 
-            try:
-                import tensorflow as tf
+        for model_idx in range(self.ensemble_size):
+            tf.keras.utils.set_random_seed(self.seed + (1009 * model_idx) + len(self.points))
+            bootstrap_idx = self.rng.randint(0, len(x_train), size=len(x_train))
 
-                tf.compat.v1.reset_default_graph()
-                tf.keras.backend.clear_session()
-            except Exception:
-                pass
+            with tf.device("/CPU:0"):
+                model = tf.keras.Sequential(
+                    [
+                        tf.keras.layers.Input(shape=(x_train.shape[1],)),
+                        tf.keras.layers.Dense(64, activation="relu"),
+                        tf.keras.layers.Dense(64, activation="relu"),
+                        tf.keras.layers.Dense(1),
+                    ]
+                )
+                model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3), loss="mse")
+                model.fit(
+                    x_train[bootstrap_idx],
+                    y_scaled[bootstrap_idx],
+                    epochs=self.predictor_epochs,
+                    batch_size=min(32, len(x_train)),
+                    verbose=0,
+                )
+                pred = model.predict(x_candidates, verbose=0).reshape(-1)
+                predictions.append((pred * y_std) + y_mean)
 
-        candidate_indices = acq_fn(predictions, ytrain=ytrain, explore_type=self.explore_type)
-        return list(candidates[int(candidate_indices[0])]["spec"])
+        tf.keras.backend.clear_session()
+        return np.asarray(predictions, dtype=np.float32)
 
 
 def append_history(log_path: Path, row: Dict[str, Any]) -> None:
@@ -532,7 +466,7 @@ def point_from_params_json(space: Space, params_json: str) -> List[Any]:
     return point
 
 
-def load_history(log_path: Path, space: Space, optimizer: NaszillaBananasOptimizer) -> int:
+def load_history(log_path: Path, space: Space, optimizer: BananasOptimizer) -> int:
     if not log_path.exists():
         return 0
 
@@ -555,7 +489,7 @@ def main() -> None:
     exp_dir = Path(args.name)
     overrides = vars(args).copy()
     overrides["opt"] = "RS"
-    overrides["external_tuner"] = "NASzilla-BANANAS"
+    overrides["external_tuner"] = "BANANAS"
     overrides["search_space_source"] = "RS"
 
     cfg_path = create_config_file(exp_dir, overrides=overrides)
@@ -576,30 +510,20 @@ def main() -> None:
 
     base_space = search_space().search_sp(max_block=ctrl.max_conv, max_dense=ctrl.max_fc)
     objective = ObjectiveWrapper(base_space, ctrl)
-    adapter = EdgeDNNTunerBananasAdapter(
+    optimizer = BananasOptimizer(
         space=base_space,
         seed=cfg.seed,
+        init_random=args.init_random,
         candidate_pool=args.candidate_pool,
+        ensemble_size=args.ensemble_size,
+        predictor_epochs=args.predictor_epochs,
+        acq_beta=args.acq_beta,
         mutation_parents=args.mutation_parents,
         mutation_attempts=args.mutation_attempts,
         random_candidate_fraction=args.random_candidate_fraction,
     )
-    optimizer = NaszillaBananasOptimizer(
-        adapter=adapter,
-        seed=cfg.seed,
-        init_random=args.init_random,
-        ensemble_size=args.ensemble_size,
-        predictor_epochs=args.predictor_epochs,
-        explore_type=args.explore_type,
-        metann_num_layers=args.metann_num_layers,
-        metann_layer_width=args.metann_layer_width,
-        metann_lr=args.metann_lr,
-        metann_loss=args.metann_loss,
-        metann_batch_size=args.metann_batch_size,
-        metann_regularization=args.metann_regularization,
-    )
 
-    print("\nSTARTING NASZILLA BANANAS ADAPTER BASELINE\n")
+    print("\nSTARTING BANANAS BASELINE\n")
     start_time = time.time()
     best_score = float("inf")
     history_path = Path(cfg.name) / "algorithm_logs" / "bananas_history.csv"
@@ -608,7 +532,7 @@ def main() -> None:
     if args.resume:
         completed_evals = load_history(history_path, base_space, optimizer)
         if completed_evals:
-            best_score = min(float(arch["val_loss"]) for arch in adapter.data)
+            best_score = min(optimizer.scores)
             print(f"[INFO] Resumed {completed_evals} previous BANANAS evaluations from {history_path}.")
         else:
             print("[INFO] Resume requested, but no previous BANANAS history was found. Starting fresh.")
@@ -629,7 +553,7 @@ def main() -> None:
             print("[INFO] Controller early stopping triggered.")
             break
 
-        print(f"\n--- NASZILLA BANANAS ITERATION {iteration} / {args.eval} ---")
+        print(f"\n--- BANANAS ITERATION {iteration} / {args.eval} ---")
         point = optimizer.ask()
         score = float(objective.objective(point))
         optimizer.tell(point, score)
@@ -647,7 +571,7 @@ def main() -> None:
         )
 
     total_time = time.time() - start_time
-    print("\nNASZILLA BANANAS ADAPTER BASELINE FINISHED")
+    print("\nBANANAS BASELINE FINISHED")
     print(f"TOTAL TIME --------> {total_time:.2f} seconds")
     print(f"BEST SCORE --------> {best_score}")
     print(f"HISTORY -----------> {history_path}")
