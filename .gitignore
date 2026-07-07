@@ -11,6 +11,7 @@ database/*
 .idea
 .__pycache__
 .vscode
+.codex/
 .venv/
 depth_exp/*
 25_*/*

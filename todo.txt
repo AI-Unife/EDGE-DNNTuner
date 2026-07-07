@@ -10,3 +10,8 @@ CONDIZIONI: TUNER SU GITHUB E SPAZIO DI RICERCA MODIFICABILE
 
 
 Lo spazio più grande è quello con self.cfg.opt = RS
+
+
+Posso scegliere la metrica (funzione obiettivo) da ottimizzare su bananas?
+
+Dopo quante iterazioni trova il modello migliore?

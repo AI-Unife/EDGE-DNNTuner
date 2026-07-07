@@ -18,7 +18,7 @@ try:
 except ModuleNotFoundError as exc:
     raise SystemExit(
         "Missing dependency 'scikit-optimize'. Install project requirements before running "
-        "BANANAS experiments: pip install -r requirements.txt"
+        "FlexiBO experiments: pip install -r requirements.txt"
     ) from exc
 
 from components.controller import controller
@@ -29,7 +29,7 @@ from exp_config import create_config_file, load_cfg, set_active_config
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run a BANANAS-style NAS baseline on the project search space."
+        description="Run a FlexiBO-style BO baseline on the project RS search space."
     )
     parser.add_argument("--backend", type=str, default="tf", choices=["tf", "torch"])
     parser.add_argument("--eval", type=int, default=1000, help="Number of architectures to evaluate")
@@ -37,7 +37,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--mod_list", nargs="+", default=[])
     parser.add_argument("--dataset", type=str, default="cifar10")
-    parser.add_argument("--name", type=str, default="bananas_experiment")
+    parser.add_argument("--name", type=str, default="flexibo_experiment")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--quantization", action="store_true")
     parser.add_argument("--verbose", type=int, default=2)
@@ -52,33 +52,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--channels", type=int, default=2)
     parser.add_argument("--polarity", type=str, default="both", choices=["both", "sum", "sub", "drop"])
 
-    parser.add_argument("--init_random", type=int, default=10, help="Random evaluations before fitting predictors")
-    parser.add_argument("--candidate_pool", type=int, default=256, help="Candidate architectures scored by acquisition")
-    parser.add_argument("--ensemble_size", type=int, default=5, help="Number of neural predictors")
-    parser.add_argument("--predictor_epochs", type=int, default=80, help="Training epochs for each predictor")
-    parser.add_argument("--acq_beta", type=float, default=0.5, help="Exploration weight in LCB acquisition")
-    parser.add_argument(
-        "--mutation_parents",
-        type=int,
-        default=10,
-        help="Number of best evaluated architectures used as parents for BANANAS mutations.",
-    )
-    parser.add_argument(
-        "--mutation_attempts",
-        type=int,
-        default=100,
-        help="Maximum mutation attempts per requested acquisition candidate.",
-    )
-    parser.add_argument(
-        "--random_candidate_fraction",
-        type=float,
-        default=0.10,
-        help="Fraction of acquisition candidates sampled randomly instead of by mutation.",
-    )
+    parser.add_argument("--init_random", type=int, default=10, help="Random evaluations before fitting surrogate")
+    parser.add_argument("--candidate_pool", type=int, default=512, help="Random candidate configurations to score")
+    parser.add_argument("--surrogate", type=str, default="GP", choices=["GP", "RF"])
+    parser.add_argument("--beta", type=float, default=1.0, help="Uncertainty weight in FlexiBO LCB acquisition")
     parser.add_argument(
         "--resume",
         action="store_true",
-        help="Resume from algorithm_logs/bananas_history.csv if it exists.",
+        help="Resume from algorithm_logs/flexibo_history.csv if it exists.",
     )
     parser.add_argument(
         "--max_new_evals",
@@ -184,16 +165,13 @@ def json_params(space: Space, point: Sequence[Any]) -> str:
     return json.dumps(params, sort_keys=True)
 
 
-class BananasOptimizer:
+class FlexiboOptimizer:
     """
-    Lightweight BANANAS-style optimizer for this project.
+    FlexiBO-style black-box optimizer adapted to this project's RS search space.
 
-    It follows the practical BANANAS loop:
-    1. collect random architecture evaluations;
-    2. encode architectures as vectors;
-    3. train an ensemble of neural predictors;
-    4. score a candidate pool with lower-confidence-bound acquisition;
-    5. evaluate the selected architecture with the real project objective.
+    The original FlexiBO implementation builds a discrete design space from YAML
+    and selects samples with surrogate uncertainty. Here we keep the same black-box
+    idea, but use the DNN-Tuner skopt Space and the project ObjectiveWrapper.
     """
 
     def __init__(
@@ -202,24 +180,16 @@ class BananasOptimizer:
         seed: int,
         init_random: int,
         candidate_pool: int,
-        ensemble_size: int,
-        predictor_epochs: int,
-        acq_beta: float,
-        mutation_parents: int,
-        mutation_attempts: int,
-        random_candidate_fraction: float,
+        surrogate: str,
+        beta: float,
     ) -> None:
         self.space = space
         self.rng = np.random.RandomState(seed)
         self.seed = seed
         self.init_random = max(1, init_random)
         self.candidate_pool = max(1, candidate_pool)
-        self.ensemble_size = max(1, ensemble_size)
-        self.predictor_epochs = max(1, predictor_epochs)
-        self.acq_beta = acq_beta
-        self.mutation_parents = max(1, mutation_parents)
-        self.mutation_attempts = max(1, mutation_attempts)
-        self.random_candidate_fraction = min(1.0, max(0.0, random_candidate_fraction))
+        self.surrogate = surrogate
+        self.beta = float(beta)
         self.points: List[List[Any]] = []
         self.scores: List[float] = []
         self.seen = set()
@@ -229,14 +199,12 @@ class BananasOptimizer:
             return self._sample_unseen()
 
         candidates = self._sample_candidate_pool()
-        encoded_train = np.asarray([self.encode(point) for point in self.points], dtype=np.float32)
-        y = np.asarray(self.scores, dtype=np.float32)
-        encoded_candidates = np.asarray([self.encode(point) for point in candidates], dtype=np.float32)
-        predictions = self._predict_with_ensemble(encoded_train, y, encoded_candidates)
+        x_train = np.asarray([self.encode(point) for point in self.points], dtype=np.float64)
+        y_train = self._surrogate_scores()
+        x_candidates = np.asarray([self.encode(point) for point in candidates], dtype=np.float64)
 
-        mean = predictions.mean(axis=0)
-        std = predictions.std(axis=0)
-        acquisition = mean - (self.acq_beta * std)
+        mean, std = self._predict_region(x_train, y_train, x_candidates)
+        acquisition = mean - (math.sqrt(self.beta) * std)
         return candidates[int(np.argmin(acquisition))]
 
     def tell(self, point: Sequence[Any], score: float) -> None:
@@ -244,126 +212,41 @@ class BananasOptimizer:
         self.scores.append(float(score))
         self.seen.add(point_key(point))
 
+    def _surrogate_scores(self) -> np.ndarray:
+        y = np.asarray(self.scores, dtype=np.float64)
+        valid = y[np.isfinite(y) & (np.abs(y) < 1e9)]
+        if valid.size == 0:
+            return np.zeros_like(y)
+
+        worst_valid = float(np.max(valid))
+        spread = float(np.max(valid) - np.min(valid)) or 1.0
+        penalty_value = worst_valid + spread
+        return np.where(np.isfinite(y) & (np.abs(y) < 1e9), y, penalty_value)
+
     def _sample_unseen(self) -> List[Any]:
         for _ in range(1000):
             point = self.space.rvs(n_samples=1, random_state=self.rng)[0]
-            key = point_key(point)
-            if key not in self.seen:
+            if point_key(point) not in self.seen:
                 return list(point)
-        point = self.space.rvs(n_samples=1, random_state=self.rng)[0]
-        return list(point)
+        return list(self.space.rvs(n_samples=1, random_state=self.rng)[0])
 
     def _sample_candidate_pool(self) -> List[List[Any]]:
         candidates: List[List[Any]] = []
         local_seen = set()
-        random_budget = int(round(self.candidate_pool * self.random_candidate_fraction))
-        mutation_budget = max(0, self.candidate_pool - random_budget)
-
-        for _ in range(mutation_budget):
-            point = self._sample_mutation_candidate(local_seen)
-            if point is None:
-                break
-            local_seen.add(point_key(point))
-            candidates.append(point)
-
         attempts = 0
         while len(candidates) < self.candidate_pool and attempts < self.candidate_pool * 100:
             attempts += 1
-            point = self._sample_random_candidate(local_seen)
-            if point is None:
+            point = self.space.rvs(n_samples=1, random_state=self.rng)[0]
+            key = point_key(point)
+            if key in self.seen or key in local_seen:
                 continue
-            local_seen.add(point_key(point))
-            candidates.append(point)
+            local_seen.add(key)
+            candidates.append(list(point))
 
         while len(candidates) < self.candidate_pool:
             candidates.append(self._sample_unseen())
 
         return candidates
-
-    def _sample_random_candidate(self, local_seen: set[str]) -> List[Any] | None:
-        point = self.space.rvs(n_samples=1, random_state=self.rng)[0]
-        key = point_key(point)
-        if key in self.seen or key in local_seen:
-            return None
-        return list(point)
-
-    def _sample_mutation_candidate(self, local_seen: set[str]) -> List[Any] | None:
-        parents = self._mutation_parents()
-        if not parents:
-            return None
-
-        for _ in range(self.mutation_attempts):
-            parent = parents[int(self.rng.randint(0, len(parents)))]
-            child = self._mutate_one_dimension(parent)
-            key = point_key(child)
-            if key not in self.seen and key not in local_seen:
-                return child
-        return None
-
-    def _mutation_parents(self) -> List[List[Any]]:
-        valid = [
-            (score, point)
-            for score, point in zip(self.scores, self.points)
-            if math.isfinite(score) and abs(score) < 1e9
-        ]
-        if not valid:
-            valid = list(zip(self.scores, self.points))
-        valid.sort(key=lambda item: item[0])
-        return [list(point) for _, point in valid[: self.mutation_parents]]
-
-    def _mutate_one_dimension(self, parent: Sequence[Any]) -> List[Any]:
-        child = list(parent)
-        mutable_indices = [
-            idx
-            for idx, dim in enumerate(self.space.dimensions)
-            if self._dimension_has_alternative(dim)
-        ]
-        if not mutable_indices:
-            return self._sample_unseen()
-
-        dim_idx = int(self.rng.choice(mutable_indices))
-        dim = self.space.dimensions[dim_idx]
-        child[dim_idx] = self._mutate_value(dim, child[dim_idx])
-        return child
-
-    def _dimension_has_alternative(self, dim: Any) -> bool:
-        if isinstance(dim, Categorical):
-            return len(dim.categories) > 1
-        if isinstance(dim, Integer):
-            return int(dim.low) < int(dim.high)
-        if isinstance(dim, Real):
-            return float(dim.low) < float(dim.high)
-        return False
-
-    def _mutate_value(self, dim: Any, value: Any) -> Any:
-        if isinstance(dim, Categorical):
-            alternatives = [category for category in dim.categories if category != value]
-            return alternatives[int(self.rng.randint(0, len(alternatives)))]
-
-        if isinstance(dim, Integer):
-            low, high = int(dim.low), int(dim.high)
-            current = int(value)
-            if high <= low:
-                return current
-            if self.rng.rand() < 0.8:
-                direction = -1 if self.rng.rand() < 0.5 else 1
-                step = max(1, int(round((high - low) * 0.10)))
-                mutated = current + (direction * int(self.rng.randint(1, step + 1)))
-                return int(min(high, max(low, mutated)))
-            return int(self.rng.randint(low, high + 1))
-
-        if isinstance(dim, Real):
-            low, high = float(dim.low), float(dim.high)
-            current = float(value)
-            if high <= low:
-                return current
-            if self.rng.rand() < 0.8:
-                step = (high - low) * 0.10
-                mutated = current + float(self.rng.normal(loc=0.0, scale=step))
-                return float(min(high, max(low, mutated)))
-            return float(self.rng.uniform(low, high))
-
-        raise TypeError(f"Unsupported skopt dimension type: {type(dim)}")
 
     def encode(self, point: Sequence[Any]) -> List[float]:
         encoded: List[float] = []
@@ -380,43 +263,62 @@ class BananasOptimizer:
                 raise TypeError(f"Unsupported skopt dimension type: {type(dim)}")
         return encoded
 
-    def _predict_with_ensemble(self, x_train: np.ndarray, y: np.ndarray, x_candidates: np.ndarray) -> np.ndarray:
+    def _predict_region(
+        self,
+        x_train: np.ndarray,
+        y_train: np.ndarray,
+        x_candidates: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        if self.surrogate == "RF":
+            return self._predict_rf(x_train, y_train, x_candidates)
+        return self._predict_gp(x_train, y_train, x_candidates)
+
+    def _predict_gp(
+        self,
+        x_train: np.ndarray,
+        y_train: np.ndarray,
+        x_candidates: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
         try:
-            import tensorflow as tf
+            from sklearn.gaussian_process import GaussianProcessRegressor
+            from sklearn.gaussian_process.kernels import Matern, WhiteKernel
         except ModuleNotFoundError as exc:
-            raise RuntimeError("TensorFlow is required for the BANANAS predictor ensemble.") from exc
+            raise RuntimeError("scikit-learn is required for the FlexiBO GP surrogate.") from exc
 
-        y_mean = float(y.mean())
-        y_std = float(y.std()) or 1.0
-        y_scaled = (y - y_mean) / y_std
-        predictions = []
+        kernel = Matern(nu=2.5) + WhiteKernel(noise_level=1e-6)
+        model = GaussianProcessRegressor(
+            kernel=kernel,
+            normalize_y=True,
+            random_state=self.seed + len(self.points),
+            n_restarts_optimizer=0,
+        )
+        model.fit(x_train, y_train)
+        mean, std = model.predict(x_candidates, return_std=True)
+        return np.asarray(mean, dtype=np.float64), np.asarray(std, dtype=np.float64)
 
-        for model_idx in range(self.ensemble_size):
-            tf.keras.utils.set_random_seed(self.seed + (1009 * model_idx) + len(self.points))
-            bootstrap_idx = self.rng.randint(0, len(x_train), size=len(x_train))
+    def _predict_rf(
+        self,
+        x_train: np.ndarray,
+        y_train: np.ndarray,
+        x_candidates: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        try:
+            from sklearn.ensemble import RandomForestRegressor
+        except ModuleNotFoundError as exc:
+            raise RuntimeError("scikit-learn is required for the FlexiBO RF surrogate.") from exc
 
-            with tf.device("/CPU:0"):
-                model = tf.keras.Sequential(
-                    [
-                        tf.keras.layers.Input(shape=(x_train.shape[1],)),
-                        tf.keras.layers.Dense(64, activation="relu"),
-                        tf.keras.layers.Dense(64, activation="relu"),
-                        tf.keras.layers.Dense(1),
-                    ]
-                )
-                model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3), loss="mse")
-                model.fit(
-                    x_train[bootstrap_idx],
-                    y_scaled[bootstrap_idx],
-                    epochs=self.predictor_epochs,
-                    batch_size=min(32, len(x_train)),
-                    verbose=0,
-                )
-                pred = model.predict(x_candidates, verbose=0).reshape(-1)
-                predictions.append((pred * y_std) + y_mean)
-
-        tf.keras.backend.clear_session()
-        return np.asarray(predictions, dtype=np.float32)
+        model = RandomForestRegressor(
+            n_estimators=64,
+            min_samples_leaf=1,
+            random_state=self.seed + len(self.points),
+            n_jobs=1,
+        )
+        model.fit(x_train, y_train)
+        tree_predictions = np.asarray(
+            [tree.predict(x_candidates) for tree in model.estimators_],
+            dtype=np.float64,
+        )
+        return tree_predictions.mean(axis=0), tree_predictions.std(axis=0)
 
 
 def append_history(log_path: Path, row: Dict[str, Any]) -> None:
@@ -466,7 +368,7 @@ def point_from_params_json(space: Space, params_json: str) -> List[Any]:
     return point
 
 
-def load_history(log_path: Path, space: Space, optimizer: BananasOptimizer) -> int:
+def load_history(log_path: Path, space: Space, optimizer: FlexiboOptimizer) -> int:
     if not log_path.exists():
         return 0
 
@@ -489,7 +391,7 @@ def main() -> None:
     exp_dir = Path(args.name)
     overrides = vars(args).copy()
     overrides["opt"] = "RS"
-    overrides["external_tuner"] = "BANANAS"
+    overrides["external_tuner"] = "FlexiBO"
     overrides["search_space_source"] = "RS"
 
     cfg_path = create_config_file(exp_dir, overrides=overrides)
@@ -510,32 +412,28 @@ def main() -> None:
 
     base_space = search_space().search_sp(max_block=ctrl.max_conv, max_dense=ctrl.max_fc)
     objective = ObjectiveWrapper(base_space, ctrl)
-    optimizer = BananasOptimizer(
+    optimizer = FlexiboOptimizer(
         space=base_space,
         seed=cfg.seed,
         init_random=args.init_random,
         candidate_pool=args.candidate_pool,
-        ensemble_size=args.ensemble_size,
-        predictor_epochs=args.predictor_epochs,
-        acq_beta=args.acq_beta,
-        mutation_parents=args.mutation_parents,
-        mutation_attempts=args.mutation_attempts,
-        random_candidate_fraction=args.random_candidate_fraction,
+        surrogate=args.surrogate,
+        beta=args.beta,
     )
 
-    print("\nSTARTING BANANAS BASELINE\n")
+    print("\nSTARTING FLEXIBO BASELINE\n")
     start_time = time.time()
     best_score = float("inf")
-    history_path = Path(cfg.name) / "algorithm_logs" / "bananas_history.csv"
+    history_path = Path(cfg.name) / "algorithm_logs" / "flexibo_history.csv"
     completed_evals = 0
 
     if args.resume:
         completed_evals = load_history(history_path, base_space, optimizer)
         if completed_evals:
             best_score = min(optimizer.scores)
-            print(f"[INFO] Resumed {completed_evals} previous BANANAS evaluations from {history_path}.")
+            print(f"[INFO] Resumed {completed_evals} previous FlexiBO evaluations from {history_path}.")
         else:
-            print("[INFO] Resume requested, but no previous BANANAS history was found. Starting fresh.")
+            print("[INFO] Resume requested, but no previous FlexiBO history was found. Starting fresh.")
 
     target_eval = args.eval
     if args.max_new_evals is not None:
@@ -553,7 +451,7 @@ def main() -> None:
             print("[INFO] Controller early stopping triggered.")
             break
 
-        print(f"\n--- BANANAS ITERATION {iteration} / {args.eval} ---")
+        print(f"\n--- FLEXIBO ITERATION {iteration} / {args.eval} ---")
         point = optimizer.ask()
         score = float(objective.objective(point))
         optimizer.tell(point, score)
@@ -571,7 +469,7 @@ def main() -> None:
         )
 
     total_time = time.time() - start_time
-    print("\nBANANAS BASELINE FINISHED")
+    print("\nFLEXIBO BASELINE FINISHED")
     print(f"TOTAL TIME --------> {total_time:.2f} seconds")
     print(f"BEST SCORE --------> {best_score}")
     print(f"HISTORY -----------> {history_path}")

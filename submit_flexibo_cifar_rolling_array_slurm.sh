@@ -5,10 +5,6 @@ CONDA_ENV="${CONDA_ENV:-edge-dnntuner-bananas}"
 PYTHON_BIN="${PYTHON_BIN:-conda run --no-capture-output -n ${CONDA_ENV} python}"
 JOB_SETUP="${JOB_SETUP:-module load cuda/12.2}"
 
-# Current UNIFE GPU partitions from sinfo:
-# gpu_H100, gpu_H100_partitioned, gpu_L40S
-# A comma-separated list is accepted, for example:
-# PARTITION=gpu_H100,gpu_H100_partitioned
 PARTITION="${PARTITION:-gpu_H100_partitioned}"
 GPUS="${GPUS:-1}"
 MEMORY="${MEMORY:-64G}"
@@ -19,19 +15,20 @@ TOTAL_EVALS="${TOTAL_EVALS:-1000}"
 CHUNK_EVALS="${CHUNK_EVALS:-25}"
 EPOCHS="${EPOCHS:-100}"
 MAX_PARALLEL="${MAX_PARALLEL:-10}"
-MUTATION_PARENTS="${MUTATION_PARENTS:-10}"
-MUTATION_ATTEMPTS="${MUTATION_ATTEMPTS:-100}"
-RANDOM_CANDIDATE_FRACTION="${RANDOM_CANDIDATE_FRACTION:-0.10}"
+SURROGATE="${SURROGATE:-GP}"
+BETA="${BETA:-1.0}"
+CANDIDATE_POOL="${CANDIDATE_POOL:-512}"
+INIT_RANDOM="${INIT_RANDOM:-10}"
 
-RESULTS_DIR="${RESULTS_DIR:-results_BANANAS_rolling}"
+RESULTS_DIR="${RESULTS_DIR:-results_FLEXIBO_rolling}"
 SLURM_LOG_DIR="${SLURM_LOG_DIR:-slurm_logs}"
 HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${HOME}/.cache/huggingface/datasets}"
 
 read -r -a DATASETS <<< "${DATASETS_LIST:-cifar10 cifar100}"
 read -r -a SEEDS <<< "${SEEDS_LIST:-42 123 96 7 84}"
 
-if [[ ! -f bananas_runner.py ]]; then
-  echo "Error: bananas_runner.py not found. Run this script from the EDGE-DNNTuner repo root." >&2
+if [[ ! -f flexibo_runner.py ]]; then
+  echo "Error: flexibo_runner.py not found. Run this script from the EDGE-DNNTuner repo root." >&2
   exit 1
 fi
 
@@ -43,7 +40,7 @@ validate_partitions() {
       gpu_H100|gpu_H100_partitioned|gpu_L40S)
         ;;
       cpu_amd_default|cpu_amd_zen4|cpu_amd_zen4_2x96|cpu_amd_zen4_2x48)
-        echo "Error: PARTITION contains CPU partition '$part', but BANANAS training requires GPU." >&2
+        echo "Error: PARTITION contains CPU partition '$part', but FlexiBO training requires GPU." >&2
         exit 1
         ;;
       *)
@@ -90,23 +87,23 @@ fi
 
 CHUNKS=$(((TOTAL_EVALS + CHUNK_EVALS - 1) / CHUNK_EVALS))
 
-if [[ "${BANANAS_ROLLING_WORKER:-0}" == "1" ]]; then
+if [[ "${FLEXIBO_ROLLING_WORKER:-0}" == "1" ]]; then
   TASK_ID="${SLURM_ARRAY_TASK_ID:?SLURM_ARRAY_TASK_ID is required in worker mode}"
-  CHUNK="${BANANAS_ROLLING_CHUNK:?BANANAS_ROLLING_CHUNK is required in worker mode}"
+  CHUNK="${FLEXIBO_ROLLING_CHUNK:?FLEXIBO_ROLLING_CHUNK is required in worker mode}"
 
   DATASET_INDEX=$((TASK_ID / ${#SEEDS[@]}))
   SEED_INDEX=$((TASK_ID % ${#SEEDS[@]}))
 
   DATA="${DATASETS[$DATASET_INDEX]}"
   SEED="${SEEDS[$SEED_INDEX]}"
-  NAME_EXP="bananas_${DATA}_seed${SEED}_e${TOTAL_EVALS}_ep${EPOCHS}"
-  HISTORY_PATH="${RESULTS_DIR}/${NAME_EXP}/algorithm_logs/bananas_history.csv"
+  NAME_EXP="flexibo_${DATA}_seed${SEED}_e${TOTAL_EVALS}_ep${EPOCHS}"
+  HISTORY_PATH="${RESULTS_DIR}/${NAME_EXP}/algorithm_logs/flexibo_history.csv"
   COMPLETED_BEFORE=$(history_count "$HISTORY_PATH")
 
-  echo "Running rolling chunk ${CHUNK}/${CHUNKS}"
+  echo "Running FlexiBO rolling chunk ${CHUNK}/${CHUNKS}"
   echo "Array task ${TASK_ID}/${TASK_COUNT}: dataset=${DATA}, seed=${SEED}"
   echo "Completed before chunk: ${COMPLETED_BEFORE}/${TOTAL_EVALS}"
-  echo "Budget: chunk_evals=${CHUNK_EVALS}, epochs=${EPOCHS}"
+  echo "Budget: chunk_evals=${CHUNK_EVALS}, epochs=${EPOCHS}, surrogate=${SURROGATE}"
   echo "Result dir=${RESULTS_DIR}/${NAME_EXP}"
 
   CHUNK_TARGET=$((CHUNK * CHUNK_EVALS))
@@ -134,7 +131,7 @@ if [[ "${BANANAS_ROLLING_WORKER:-0}" == "1" ]]; then
     eval "$JOB_SETUP"
   fi
 
-  ${PYTHON_BIN} bananas_runner.py \
+  ${PYTHON_BIN} flexibo_runner.py \
     --name "${RESULTS_DIR}/${NAME_EXP}" \
     --dataset "$DATA" \
     --seed "$SEED" \
@@ -143,9 +140,10 @@ if [[ "${BANANAS_ROLLING_WORKER:-0}" == "1" ]]; then
     --mod_list flops_module \
     --resume \
     --max_new_evals "$REMAINING_FOR_CHUNK" \
-    --mutation_parents "$MUTATION_PARENTS" \
-    --mutation_attempts "$MUTATION_ATTEMPTS" \
-    --random_candidate_fraction "$RANDOM_CANDIDATE_FRACTION"
+    --surrogate "$SURROGATE" \
+    --beta "$BETA" \
+    --candidate_pool "$CANDIDATE_POOL" \
+    --init_random "$INIT_RANDOM"
 
   COMPLETED_AFTER=$(history_count "$HISTORY_PATH")
   echo "Completed after chunk: ${COMPLETED_AFTER}/${TOTAL_EVALS}"
@@ -156,8 +154,7 @@ DATASETS_LIST="${DATASETS[*]}"
 SEEDS_LIST="${SEEDS[*]}"
 export CONDA_ENV PYTHON_BIN JOB_SETUP PARTITION GPUS MEMORY QOS TIME_LIMIT
 export TOTAL_EVALS CHUNK_EVALS EPOCHS MAX_PARALLEL RESULTS_DIR SLURM_LOG_DIR HF_DATASETS_CACHE
-export DATASETS_LIST SEEDS_LIST
-export MUTATION_PARENTS MUTATION_ATTEMPTS RANDOM_CANDIDATE_FRACTION
+export DATASETS_LIST SEEDS_LIST SURROGATE BETA CANDIDATE_POOL INIT_RANDOM
 
 base_sbatch_args=(
   --partition="$PARTITION"
@@ -172,7 +169,7 @@ if [[ -n "$QOS" ]]; then
   base_sbatch_args+=(--qos="$QOS")
 fi
 
-echo "Starting rolling BANANAS array submission"
+echo "Starting rolling FlexiBO array submission"
 echo "Datasets: ${DATASETS[*]}"
 echo "Seeds: ${SEEDS[*]}"
 echo "Array tasks per chunk: ${TASK_COUNT}, max parallel tasks: ${MAX_PARALLEL}"
@@ -186,8 +183,8 @@ for CHUNK in $(seq 1 "$CHUNKS"); do
   set +e
   sbatch --wait \
     "${base_sbatch_args[@]}" \
-    --job-name="bananas_roll_c${CHUNK}" \
-    --export="ALL,BANANAS_ROLLING_WORKER=1,BANANAS_ROLLING_CHUNK=${CHUNK}" \
+    --job-name="flexibo_roll_c${CHUNK}" \
+    --export="ALL,FLEXIBO_ROLLING_WORKER=1,FLEXIBO_ROLLING_CHUNK=${CHUNK}" \
     "$SCRIPT_PATH"
   status=$?
   set -e
