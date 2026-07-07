@@ -65,8 +65,9 @@ Dipendenza originale:
 othertunerdependencies/bananas/naszilla
 ```
 
-Questa directory e' un git submodule del repository NASzilla, che contiene
-l'implementazione originale di BANANAS usata come riferimento.
+Questa directory contiene un vendoring minimale dei file NASzilla originali
+necessari al runner. Non e' un submodule: i file sono versionati direttamente
+in questa repository per semplificare pull e uso sul cluster.
 
 Script Slurm:
 
@@ -83,7 +84,7 @@ BANANAS e' implementato come adapter verso il codice originale NASzilla/BANANAS:
 2. ogni configurazione RS viene trattata come una "architettura" NASzilla;
 3. l'encoding e' prodotto dall'adapter;
 4. le mutazioni sono definite dall'adapter sullo spazio RS;
-5. il neural predictor e le acquisition function arrivano dal submodule NASzilla;
+5. il neural predictor e le acquisition function arrivano dal codice NASzilla vendorizzato;
 6. la valutazione reale e' demandata al controller del progetto.
 
 La funzione obiettivo e' quella restituita dal controller:
@@ -281,7 +282,9 @@ Dipendenza originale:
 othertunerdependencies/flexibo/FlexiBO
 ```
 
-Questa directory e' un git submodule del repository FlexiBO originale.
+Questa directory contiene un vendoring minimale dei file FlexiBO originali
+necessari al runner. Non e' un submodule: i file sono versionati direttamente
+in questa repository per semplificare pull e uso sul cluster.
 
 Script Slurm:
 
@@ -587,10 +590,11 @@ submit_flexibo_*_wrong.sh
 
 ## Slurm
 
-Dopo un pull sul cluster, aggiornare anche i submodule:
+Dopo un pull sul cluster non servono comandi per submodule. Le dipendenze
+esterne minime sono vendorizzate nella repository, quindi basta:
 
 ```bash
-git submodule update --init --recursive
+git pull
 ```
 
 Per entrambi i tuner sono disponibili due livelli di script:

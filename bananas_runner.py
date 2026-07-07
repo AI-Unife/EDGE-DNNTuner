@@ -31,8 +31,8 @@ try:
     from naszilla.meta_neural_net import MetaNeuralnet
 except ModuleNotFoundError as exc:
     raise SystemExit(
-        "Missing NASzilla dependency. Initialize it with: "
-        "git submodule update --init --recursive othertunerdependencies/bananas/naszilla"
+        "Missing vendored NASzilla dependency under "
+        "othertunerdependencies/bananas/naszilla."
     ) from exc
 
 from components.controller import controller
