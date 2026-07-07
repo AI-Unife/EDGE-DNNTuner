@@ -1,0 +1,6 @@
+[submodule "othertunerdependencies/bananas/naszilla"]
+	path = othertunerdependencies/bananas/naszilla
+	url = https://github.com/naszilla/naszilla.git
+[submodule "othertunerdependencies/flexibo/FlexiBO"]
+	path = othertunerdependencies/flexibo/FlexiBO
+	url = https://github.com/softsys4ai/FlexiBO.git
