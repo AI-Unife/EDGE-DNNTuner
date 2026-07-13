@@ -64,6 +64,36 @@ history_count() {
   awk -F, 'NR > 1 && ($3 == "accuracy" || $3 == "both") {count++} END {print count + 0}' "$history_path"
 }
 
+configure_tensorflow_xla() {
+  if [[ -n "${XLA_FLAGS:-}" ]]; then
+    echo "Using existing XLA_FLAGS=${XLA_FLAGS}"
+    return
+  fi
+
+  local cuda_data_dir
+  cuda_data_dir="$(${PYTHON_BIN} - <<'PY'
+from pathlib import Path
+
+try:
+    import nvidia.cuda_nvcc as cuda_nvcc
+except Exception:
+    raise SystemExit(0)
+
+cuda_data_dir = Path(cuda_nvcc.__file__).resolve().parent
+libdevice = cuda_data_dir / "nvvm" / "libdevice" / "libdevice.10.bc"
+if libdevice.exists():
+    print(cuda_data_dir)
+PY
+)"
+
+  if [[ -n "$cuda_data_dir" ]]; then
+    export XLA_FLAGS="--xla_gpu_cuda_data_dir=${cuda_data_dir}"
+    echo "Configured XLA_FLAGS=${XLA_FLAGS}"
+  else
+    echo "Warning: could not find nvidia-cuda-nvcc libdevice. TensorFlow XLA JIT may fail on H100." >&2
+  fi
+}
+
 validate_partitions
 mkdir -p "$RESULTS_DIR" "$SLURM_LOG_DIR"
 
@@ -127,6 +157,7 @@ if [[ "${FLEXIBO_ROLLING_WORKER:-0}" == "1" ]]; then
   if [[ -n "$JOB_SETUP" ]]; then
     eval "$JOB_SETUP"
   fi
+  configure_tensorflow_xla
 
   flops_scale_args=()
   if [[ -n "$FLOPS_SCALE" ]]; then
