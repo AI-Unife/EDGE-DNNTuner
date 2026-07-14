@@ -21,6 +21,214 @@ base_space = search_space().search_sp(max_block=ctrl.max_conv, max_dense=ctrl.ma
 
 e quindi partono dallo stesso `components/search_space.py` usato dal progetto.
 
+## Mappa Dei File Del Branch
+
+Questa sezione riassume cosa e' stato aggiunto o modificato nel branch
+`RESCAALTRITUNER` rispetto al branch di partenza `master_show`.
+
+### File Python Aggiunti
+
+`bananas_runner.py`
+
+Runner attuale per BANANAS. Collega il tuner allo spazio RS del progetto,
+converte le configurazioni RS nel formato atteso da NASzilla/BANANAS,
+implementa le mutazioni sullo spazio RS, usa il neural predictor e le
+acquisition function vendorizzate da NASzilla, e delega la valutazione reale
+al controller del progetto. Supporta resume/chunking per Slurm e scrive i log
+in `algorithm_logs/bananas_history.csv`.
+
+`flexibo_runner.py`
+
+Runner attuale per FlexiBO. Collega FlexiBO allo stesso spazio RS e usa una
+formulazione multi-objective con accuracy e FLOPs. Quando possibile misura solo
+i FLOPs, mentre le valutazioni costose di accuracy passano dal controller del
+progetto. Usa le parti vendorizzate di FlexiBO per sampling, surrogate model e
+utility, e scrive i log in `algorithm_logs/flexibo_history.csv`.
+
+`export_tuner_results_csv.py`
+
+Script locale di post-processing. Legge i risultati scaricati dal cluster,
+principalmente `results_BANANAS_naszilla_controller_cluster/` e
+`results_FLEXIBO_controller_cluster/`, e genera:
+
+- `tuner_results_summary.csv`
+- `tuner_results_aggregates.csv`
+- `tuner_results_paper_table.csv`
+
+Il primo file contiene una riga per run. Il secondo contiene medie e statistiche
+aggregate per tuner, dataset e seed. Il terzo contiene una tabella aggregata in
+stile paper.
+
+### Codice Vendorizzato Da Altre Repository
+
+Le dipendenze usate per rendere le implementazioni piu' fedeli agli originali
+sono state copiate dentro `othertunerdependencies/` invece di usare submodule.
+Questo evita di dover eseguire `git submodule update --init --recursive` sul
+cluster.
+
+`othertunerdependencies/bananas/naszilla/naszilla/acquisition_functions.py`
+
+Funzioni di acquisizione NASzilla/BANANAS usate per scegliere le candidate
+successive dopo il fit del predictor.
+
+`othertunerdependencies/bananas/naszilla/naszilla/meta_neural_net.py`
+
+Implementazione del meta neural network/predictor usato da BANANAS per stimare
+le performance delle architetture candidate.
+
+`othertunerdependencies/bananas/naszilla/naszilla/__init__.py`
+
+File di package Python per importare il codice NASzilla vendorizzato.
+
+`othertunerdependencies/flexibo/FlexiBO/src/sampling.py`
+
+Logica FlexiBO per campionare configurazioni e obiettivi da valutare.
+
+`othertunerdependencies/flexibo/FlexiBO/src/surrogate_model.py`
+
+Surrogate model FlexiBO, inclusi i wrapper per modelli probabilistici usati
+nella scelta delle configurazioni.
+
+`othertunerdependencies/flexibo/FlexiBO/src/utils.py`
+
+Utility FlexiBO per gestione dei dati, candidati e calcoli ausiliari usati dal
+runner.
+
+`othertunerdependencies/flexibo/FlexiBO/src/__init__.py`
+
+File di package Python per importare il codice FlexiBO vendorizzato.
+
+### Script Slurm E Utility Aggiunti
+
+`scarica.sh`
+
+Scarica risultati e log dal cluster. Accetta:
+
+- `remote`, che usa `fresca@copernico.unife.it`
+- `lan`, che usa `fresca@copernico.endif.man`
+
+Sincronizza i risultati BANANAS, i risultati FlexiBO e `slurm_logs/` in
+directory locali con suffisso `_cluster`.
+
+`submit_bananas_cifar_rolling_array_slurm.sh`
+
+Script worker/array attuale per BANANAS. Esegue chunk successivi della stessa
+run leggendo lo stato gia' presente nei log, quindi permette resume senza
+perdere le valutazioni gia' completate.
+
+`submit_bananas_cifar_cpu_controller_slurm.sh`
+
+Controller leggero su partizione CPU. Sottomette un array GPU BANANAS alla
+volta e, se la campagna non e' finita, rilancia il controller successivo con
+dipendenza Slurm. Serve a non intasare `squeue` con decine di array gia'
+sottomessi.
+
+`submit_bananas_cifar_resume_chain_slurm.sh`
+
+Approccio precedente basato su catene di array con dipendenze Slurm. Funziona,
+ma e' meno comodo del controller CPU per campagne lunghe.
+
+`submit_bananas_cifar_requeue_array_slurm.sh`
+
+Approccio sperimentale basato su requeue. E' stato abbandonato perche' meno
+trasparente e meno controllabile.
+
+`submit_bananas_cifar_array_slurm.sh`
+
+Script array diretto per BANANAS. Utile per prove semplici o smoke test, ma non
+e' lo script consigliato per la campagna completa.
+
+`submit_bananas_cifar_slurm.sh`
+
+Primo script semplice per sottomettere run BANANAS. Conservato come supporto,
+ma superato dagli script rolling/controller.
+
+`submit_flexibo_cifar_rolling_array_slurm.sh`
+
+Script worker/array attuale per FlexiBO. Gestisce resume, chunk, partizione GPU
+e variabili CUDA/XLA necessarie a evitare l'errore `libdevice.10.bc`.
+
+`submit_flexibo_cifar_cpu_controller_slurm.sh`
+
+Controller leggero su partizione CPU per FlexiBO, analogo a quello BANANAS.
+Sottomette un array GPU alla volta e rilancia se ci sono ancora chunk da fare.
+
+### Ambiente e Artefatti
+
+`READMEaltrituner.md`
+
+Documento operativo del branch. Contiene la spiegazione delle implementazioni,
+le scelte metodologiche, i comandi Slurm, la lettura dei risultati e questa
+mappa dei file aggiunti/modificati.
+
+`.gitignore`
+
+E' stato esteso per ignorare file locali e artefatti pesanti, tra cui
+`.codex/`, `results_BANANAS*/`, `slurm_logs*/`, `slurm-*.out` e file modello.
+
+`environment_bananas.yml`
+
+Ambiente Conda usato per BANANAS e FlexiBO. Include TensorFlow 2.15, pacchetti
+CUDA/cuDNN installati via pip, `scikit-optimize`, `problog`, `datasets`,
+`pandas`, `PyYAML` e le altre dipendenze necessarie ai runner.
+
+`todo.txt`
+
+File di appunti di lavoro del branch. Non e' parte della pipeline eseguibile,
+ma tiene traccia delle domande operative sui tuner e sugli esperimenti.
+
+`othertunerdependencies/bananas/naszilla/LICENSE`
+
+Licenza del codice NASzilla vendorizzato.
+
+`othertunerdependencies/flexibo/FlexiBO/LICENSE`
+
+Licenza del codice FlexiBO vendorizzato.
+
+`results_BANANAS_naszilla_controller_cluster/`
+
+Risultati BANANAS scaricati dal cluster. Sono artefatti sperimentali, non codice
+sorgente. Possono essere aggiornati con `scarica.sh`.
+
+`results_FLEXIBO_controller_cluster/`
+
+Risultati FlexiBO scaricati dal cluster. Sono artefatti sperimentali, non codice
+sorgente. Possono essere aggiornati con `scarica.sh`.
+
+`slurm_logs_cluster/`
+
+Log Slurm scaricati dal cluster. Servono per diagnosticare errori, tempi di run
+e stato delle campagne.
+
+`tuner_results_summary.csv`
+
+CSV derivato dai risultati scaricati. Contiene una riga per run.
+
+`tuner_results_aggregates.csv`
+
+CSV derivato dai risultati scaricati. Contiene medie e statistiche aggregate per
+tuner, dataset e seed.
+
+`tuner_results_paper_table.csv`
+
+CSV derivato dai risultati scaricati. Contiene una tabella compatta in stile
+paper con `Best Score`, `Accuracy`, `MFLOPs` e `N. Iteration` aggregati per
+dataset e tuner.
+
+### Modifiche Funzionali Principali
+
+Le modifiche del branch introducono:
+
+- confronto di BANANAS e FlexiBO sullo stesso spazio RS del progetto;
+- adapter RS verso BANANAS/NASzilla;
+- adapter RS multi-objective verso FlexiBO con accuracy e FLOPs;
+- vendoring minimale delle parti necessarie delle repository originali;
+- resume/chunking per evitare job GPU troppo lunghi;
+- controller CPU leggeri per sottomettere pochi job array alla volta;
+- gestione CUDA/XLA negli script Slurm per evitare errori `libdevice.10.bc`;
+- script per scaricare risultati/log dal cluster;
+- script per esportare risultati e medie in CSV.
+
 ## Spazio Di Ricerca RS
 
 Lo spazio RS include sia scelte architetturali sia iperparametri di training. In particolare contiene variabili come:
@@ -193,8 +401,6 @@ its
 
 ### Mutazioni
 
-La prima versione locale usava un candidate pool random. E' stata salvata con suffisso `_wrong` e non va usata per gli esperimenti finali.
-
 La versione attuale usa NASzilla per predittore e acquisition, ma mantiene un adapter di mutazione sullo spazio RS, perche' NASzilla originale sa mutare celle NASBench, non configurazioni miste DNN-Tuner.
 
 Ora, dopo le valutazioni iniziali random, il candidate pool e' costruito principalmente mutando i migliori punti gia' valutati.
@@ -256,17 +462,6 @@ Quindi la descrizione corretta e':
 ```text
 NASzilla/BANANAS with an EDGE-DNN Tuner RS search-space adapter.
 ```
-
-### File Con Suffisso `_wrong`
-
-I file:
-
-```text
-bananas_runner_wrong.py
-submit_bananas_*_wrong.sh
-```
-
-sono backup della prima implementazione locale. Restano nel branch per tracciabilita', ma non sono la versione da usare per gli esperimenti finali.
 
 ## FlexiBO
 
@@ -578,16 +773,6 @@ Descrizione corretta:
 FlexiBO adapted to the EDGE-DNN Tuner RS search space, using original FlexiBO sampling over validation error and FLOPs objectives.
 ```
 
-La prima versione locale/single-objective non va usata per gli esperimenti
-finali.
-
-I backup della versione precedente sono:
-
-```text
-flexibo_runner_wrong.py
-submit_flexibo_*_wrong.sh
-```
-
 ## Slurm
 
 Dopo un pull sul cluster non servono comandi per submodule. Le dipendenze
@@ -688,6 +873,290 @@ FlexiBO:
 find results_FLEXIBO_mo_controller -name flexibo_history.csv \
   -exec sh -c 'printf "%-110s %s accuracy eval\n" "$1" "$(awk -F, '\''NR > 1 && ($3 == "accuracy" || $3 == "both") {c++} END {print c + 0}'\'' "$1")"' sh {} \; | sort
 ```
+
+## CSV Dei Risultati Scaricati
+
+Dopo aver scaricato risultati e log dal cluster con:
+
+```bash
+./scarica.sh remote
+```
+
+oppure, dalla LAN:
+
+```bash
+./scarica.sh lan
+```
+
+si puo' generare un CSV riassuntivo locale con:
+
+```bash
+./export_tuner_results_csv.py
+```
+
+I file prodotti di default sono:
+
+```text
+tuner_results_summary.csv
+tuner_results_aggregates.csv
+tuner_results_paper_table.csv
+```
+
+`tuner_results_summary.csv` contiene una riga per ogni run, cioe' per ogni combinazione:
+
+```text
+tuner, dataset, seed
+```
+
+`tuner_results_aggregates.csv` contiene invece medie e statistiche aggregate.
+
+`tuner_results_paper_table.csv` contiene la tabella gia' aggregata in stile
+paper, con una riga per:
+
+```text
+dataset, strategy
+```
+
+e colonne:
+
+```text
+Best Score
+Accuracy
+MFLOPs
+N. Iteration
+```
+
+I valori sono formattati come:
+
+```text
+media (+- deviazione standard)
+```
+
+Per scegliere altri nomi:
+
+```bash
+./export_tuner_results_csv.py \
+  --output risultati_tuner.csv \
+  --aggregates-output risultati_tuner_aggregati.csv \
+  --paper-table-output risultati_tuner_tabella_paper.csv
+```
+
+Lo script legge:
+
+```text
+results_BANANAS_naszilla_controller_cluster/
+results_FLEXIBO_controller_cluster/
+```
+
+cioe' le directory locali create da `scarica.sh`.
+
+### Significato Delle Colonne
+
+Le colonne principali sono:
+
+```text
+tuner
+dataset
+seed
+progress_evals
+events
+best_score
+best_accuracy
+```
+
+`progress_evals` indica quante valutazioni con accuracy/training sono state completate.
+
+Per BANANAS:
+
+```text
+progress_evals = events
+```
+
+perche' ogni evento corrisponde a una rete valutata.
+
+Per FlexiBO:
+
+```text
+events >= progress_evals
+```
+
+perche' FlexiBO registra anche eventi FLOPs-only, cioe' valutazioni economiche del secondo obiettivo senza training completo. Per confrontare il budget di training/GPU, usare `progress_evals`, non `events`.
+
+### Metriche Principali
+
+Il CSV espone due metriche principali:
+
+```text
+best_score
+best_accuracy
+```
+
+`best_score` e' il migliore valore della funzione obiettivo ottimizzata dal tuner. Piu' basso e' meglio.
+
+Con `flops_module`, lo score non e' solo accuracy: incorpora il tradeoff/controllo legato a FLOPs e parametri. Quindi questa e' la metrica corretta quando si vuole valutare il tuner secondo l'obiettivo del progetto.
+
+`best_accuracy` e' la massima accuracy pura osservata in quella run. E' utile per capire quanto bene il tuner riesce a spingere la performance predittiva, ignorando il fatto che il modello possa essere piu' costoso.
+
+In pratica:
+
+```text
+best_score    -> migliore modello secondo l'obiettivo ottimizzato
+best_accuracy -> migliore accuracy pura trovata
+```
+
+Le colonne `best_score_event`, `best_score_accuracy`, `best_score_flops`,
+`best_score_params`, `best_accuracy_event`, `best_accuracy_flops` e
+`best_accuracy_params` sono dettagli di supporto: indicano dove e con quale
+costo sono stati ottenuti i due valori principali.
+
+### CSV Stile Paper
+
+Il file:
+
+```text
+tuner_results_paper_table.csv
+```
+
+e' quello piu' simile alle tabelle del paper.
+
+Esempio di colonne:
+
+```text
+dataset
+strategy
+runs
+Best Score
+Accuracy
+MFLOPs
+N. Iteration
+```
+
+Il significato e':
+
+- `strategy`: tuner usato, ad esempio `BANANAS` o `FlexiBO`;
+- `Best Score`: media e deviazione standard del miglior score trovato;
+- `Accuracy`: test accuracy del modello che ha ottenuto il miglior score;
+- `MFLOPs`: FLOPs, in milioni, del modello che ha ottenuto il miglior score;
+- `N. Iteration`: iterazione/evento in cui e' stata identificata la migliore architettura valida;
+- `runs`: numero di seed/run aggregate.
+
+Quindi `Accuracy`, `MFLOPs` e `N. Iteration` descrivono lo stesso modello di
+`Best Score`. Questo e' diverso da `best_accuracy` nel CSV dettagliato, che
+invece indica la massima accuracy pura osservata nella run, anche se ottenuta da
+un modello diverso.
+
+Per BANANAS un evento corrisponde a una valutazione completa. Per FlexiBO un
+evento puo' essere anche una valutazione FLOPs-only, quindi `N. Iteration`
+segue la logica della caption del paper: numero di iterazioni del tuner
+necessarie a identificare la migliore architettura valida.
+
+Oltre alle colonne formattate, il CSV contiene anche le colonne numeriche:
+
+```text
+best_score_rank
+accuracy_rank
+mflops_rank
+n_iteration_rank
+best_score_mean
+best_score_std
+accuracy_pct_mean
+accuracy_pct_std
+mflops_mean
+mflops_std
+n_iteration_mean
+n_iteration_std
+```
+
+Le colonne `*_rank` permettono di applicare lo stile della caption del paper:
+rank `1` in grassetto, rank `2` in corsivo. Per `Best Score`, `MFLOPs` e
+`N. Iteration` il valore minore e' migliore; per `Accuracy` il valore maggiore
+e' migliore.
+
+Le altre colonne numeriche sono piu' comode per plotting o ulteriori
+elaborazioni.
+
+### CSV Aggregati
+
+Il file:
+
+```text
+tuner_results_aggregates.csv
+```
+
+contiene medie gia' pronte per leggere i risultati senza dover aggregare a mano.
+
+La colonna `group_type` indica il tipo di aggregazione:
+
+```text
+tuner
+tuner_dataset_mean_over_seeds
+tuner_seed_mean_over_datasets
+```
+
+`tuner` aggrega tutte le run di un tuner, quindi fa la media su dataset e seed.
+
+`tuner_dataset_mean_over_seeds` aggrega per:
+
+```text
+tuner, dataset
+```
+
+quindi e' la media su tutti i seed dello stesso dataset. Questa e' di solito la riga piu' utile per confrontare BANANAS e FlexiBO su CIFAR10 o CIFAR100.
+
+`tuner_seed_mean_over_datasets` aggrega per:
+
+```text
+tuner, seed
+```
+
+quindi e' la media dello stesso seed sui dataset disponibili. Serve soprattutto per controllare se un seed e' sistematicamente piu' favorevole o sfavorevole.
+
+Le colonne aggregate principali sono:
+
+```text
+mean_progress_evals
+mean_best_score
+std_best_score
+min_best_score
+max_best_score
+mean_best_score_event
+std_best_score_event
+mean_best_score_accuracy
+std_best_score_accuracy
+mean_best_accuracy
+std_best_accuracy
+min_best_accuracy
+max_best_accuracy
+```
+
+Sono presenti anche medie di supporto per FLOPs, parametri ed eventi penalizzati:
+
+```text
+mean_best_score_flops
+mean_best_score_params
+mean_best_accuracy_flops
+mean_best_accuracy_params
+mean_invalid_or_penalty_events
+```
+
+### Medie Snapshot Locale Per Dataset
+
+Le seguenti medie sono state calcolate dallo snapshot locale corrente con:
+
+```bash
+./export_tuner_results_csv.py
+```
+
+Sono le righe `tuner_dataset_mean_over_seeds` di `tuner_results_aggregates.csv`.
+
+| tuner | dataset | runs | mean progress evals | mean best score | mean best accuracy |
+| --- | --- | ---: | ---: | ---: | ---: |
+| BANANAS | cifar10 | 5 | 150.0 | -0.7872 | 0.7635 |
+| BANANAS | cifar100 | 5 | 143.8 | -0.5310 | 0.4017 |
+| FlexiBO | cifar10 | 5 | 230.6 | -0.7924 | 0.7562 |
+| FlexiBO | cifar100 | 5 | 220.0 | -0.5156 | 0.4052 |
+
+Queste medie sono uno snapshot intermedio: non tutte le run hanno lo stesso numero di valutazioni e nessuna e' ancora arrivata a `1000/1000`.
 
 ## Note Metodologiche
 

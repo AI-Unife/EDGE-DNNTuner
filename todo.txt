@@ -1,17 +1,1 @@
-Individuare (dai RW) se c'è un TUNER pubblicato paragonabile (permette di specificare spazio di ricerca)
-
-
-DARTS BANANAS FLEXIBO ENAS
-
-
-CONDIZIONI: TUNER SU GITHUB E SPAZIO DI RICERCA MODIFICABILE
-
-(dopo quanti reti testate >> ore gpu)
-
-
-Lo spazio più grande è quello con self.cfg.opt = RS
-
-
-Posso scegliere la metrica (funzione obiettivo) da ottimizzare su bananas?
-
-Dopo quante iterazioni trova il modello migliore?
+Guarda dove avrebbe fatto early stopping con 30 di patience
