@@ -326,16 +326,22 @@ def main():
 
     # ── 5–6. Rebuild + retrain (only when --retrain is passed) ───────────────
 
-    # cfg.name is the *relative* path stored in config.yaml at the time the
-    # tuning run was launched (e.g. "results_gesture_new/26_03_...").
-    # All file I/O inside training() (JSON model dump, dashboard save, etc.)
-    # uses that relative path, so it only works if the CWD matches the original
-    # launch directory.  We reconstruct that base directory from the known
-    # absolute experiment path and the relative cfg.name, then chdir() into it.
-    cfg_name_parts = Path(cfg.name).parts
-    base_dir = experiment
-    for _ in cfg_name_parts:
-        base_dir = base_dir.parent
+    # cfg.name may be a *relative* path written at tuning time (e.g.
+    # "results_gesture_new/26_03_...").  All file I/O inside training() builds
+    # paths like "{cfg.name}/Model/..." so using a relative name breaks when
+    # the script is run from a different working directory.
+    # Fix: overwrite cfg.name in config.yaml with the resolved absolute path of
+    # the experiment directory, then reload — training() will then always use
+    # the correct absolute path regardless of the current working directory.
+    if str(experiment) != cfg.name:
+        import yaml
+        with open(config_path, "r") as f:
+            raw = yaml.safe_load(f)
+        raw["name"] = str(experiment)
+        with open(config_path, "w") as f:
+            yaml.safe_dump(raw, f, sort_keys=False, allow_unicode=True)
+        cfg = reload_cfg()
+        print(f"[Config] Updated 'name' to absolute path: {experiment}")
 
     if not args.retrain:
         # Only print a summary of what was found and exit cleanly
@@ -350,12 +356,7 @@ def main():
         return
 
     # ── 5. Rebuild the architecture with the configured backend ──────────────
-    # Change to the original launch directory so that all relative paths used
-    # by training() (e.g. "{cfg.name}/Model/...") resolve correctly.
-    print(f"\n[5] Changing working directory to: {base_dir}")
-    os.chdir(base_dir)
-
-    print(f"[5] Rebuilding model with backend='{cfg.backend}'...")
+    print(f"\n[5] Rebuilding model with backend='{cfg.backend}'...")
 
     if cfg.backend == "tf":
         from tensorflow_implementation import module_backend, neural_network
