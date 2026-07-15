@@ -89,12 +89,37 @@ class NeuralNetwork(BaseNeuralNetwork):
         else:
             return t.contiguous().float()
     
+    def _model_forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        """
+        Run a forward pass through the model, handling both standard 4D input
+        (N, C, H, W) and temporal 5D input (N, T, C, H, W).
+
+        For temporal data each frame is processed independently; the per-frame
+        logits are averaged across the time dimension before returning, so the
+        output is always (N, n_classes) regardless of the number of frames.
+        """
+        if inputs.ndim == 5:
+            N, T, C, H, W = inputs.shape
+            # Flatten the time dimension into the batch dimension
+            flat = inputs.view(N * T, C, H, W)
+            # Run all frames in a single forward pass (more efficient than a loop)
+            out_flat = self.model(flat)          # (N*T, n_classes)
+            # Average logits across frames to produce one prediction per sequence
+            return out_flat.view(N, T, -1).mean(dim=1)  # (N, n_classes)
+        return self.model(inputs)
+
     def build_network(self, params, layer_x_block=2):
         """
         Build the PyTorch model according to the given hyperparameters.
         """
-        input_shape = self.dataset.X_train.shape[1:]  # (H, W, C)
-        self.input_shape = (input_shape[2], input_shape[0], input_shape[1])  # Convert to (C, H, W)
+        if self.dataset.X_train.ndim == 5:
+            # Temporal dataset: (N, T, H, W, C) — the model operates on single
+            # frames, so derive the per-frame shape (H, W, C) from axis 2 onward.
+            frame_shape = self.dataset.X_train.shape[2:]  # (H, W, C)
+            self.input_shape = (frame_shape[2], frame_shape[0], frame_shape[1])  # (C, H, W)
+        else:
+            input_shape = self.dataset.X_train.shape[1:]  # (H, W, C)
+            self.input_shape = (input_shape[2], input_shape[0], input_shape[1])  # (C, H, W)
 
         self.model = TorchModel(
             params=params,
@@ -253,7 +278,8 @@ class NeuralNetwork(BaseNeuralNetwork):
                 for inputs, labels in train_loader:
                     inputs, labels = inputs.to(self.device), labels.to(self.device)
                     optimizer.zero_grad()
-                    outputs = self.model(inputs)
+                    # _model_forward handles both 4D and 5D (temporal) inputs
+                    outputs = self._model_forward(inputs)
                     loss = self.criterion(outputs, labels)
                     # Regularization
                     if self.rgl:
@@ -323,7 +349,8 @@ class NeuralNetwork(BaseNeuralNetwork):
         with torch.no_grad():
             for inputs, labels in test_loader:
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
-                outputs = self.model(inputs)
+                # _model_forward handles both 4D and 5D (temporal) inputs
+                outputs = self._model_forward(inputs)
                 loss = self.criterion(outputs, labels)
                 val_loss += loss.item()
                 val_correct += (outputs.argmax(1) == labels).sum().item()
