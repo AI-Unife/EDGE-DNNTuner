@@ -233,7 +233,7 @@ def parse_args() -> argparse.Namespace:
                         help="Weight HW loss")
     parser.add_argument('--lacc', type=float, default=0.30,
                         help="if 1-acc>lacc --> Underfitting")
-    parser.add_argument('--flops_th', type=int, default=15000000000,
+    parser.add_argument('--flops_th', type=int, default=150000000,
                          help="Max number of FLOPS")
     parser.add_argument('--nparams_th', type=int, default=150000000,
                         help="Max number of PARAMS")

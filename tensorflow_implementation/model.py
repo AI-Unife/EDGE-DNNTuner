@@ -62,7 +62,7 @@ class TFModel(TunerModel):
         self.da = params.get("data_augmentation", False)
 
         print(f"\n\n{self.cfg.dataset.lower()}\n\n")
-        batch = True if "tiny" in self.cfg.dataset.lower() or "cim" in self.cfg.dataset.lower() else False  # self.reg if self.reg else None
+        batch = True if "tiny" in self.cfg.dataset.lower() or "beans" in self.cfg.dataset.lower() else False  # self.reg if self.reg else None
         self.model = None
         # 2) Build a new CNN
 
