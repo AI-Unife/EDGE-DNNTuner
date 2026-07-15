@@ -77,8 +77,17 @@ class NeuralNetwork(BaseNeuralNetwork):
     @staticmethod
     def to_tensor(array):
         if array.ndim == 3:
+            # (N, H, W) → (N, H, W, 1)
             array = array[..., None]
-        return torch.from_numpy(array).permute(0, 3, 1, 2).contiguous().float()
+        t = torch.from_numpy(array)
+        if t.ndim == 4:
+            # (N, H, W, C) → (N, C, H, W)
+            return t.permute(0, 3, 1, 2).contiguous().float()
+        elif t.ndim == 5:
+            # Temporal gesture: (N, T, H, W, C) → (N, T, C, H, W)
+            return t.permute(0, 1, 4, 2, 3).contiguous().float()
+        else:
+            return t.contiguous().float()
     
     def build_network(self, params, layer_x_block=2):
         """
