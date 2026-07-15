@@ -1,17 +1,17 @@
 """
-test_experiment.py  –  Valuta un esperimento già addestrato e lo ri-addestra.
+test_experiment.py  –  Evaluate a pre-trained experiment and optionally retrain it.
 
-Uso:
-    python test_experiment.py --experiment <path/to/experiment_dir> [--epochs N] [--backend tf|torch]
+Usage:
+    python test_experiment.py --experiment <path/to/experiment_dir> [options]
 
-Passi:
-  1) Carica Model/best-model.keras
-  2) Carica il dataset dal config.yaml dell'esperimento
-  3) Testa il modello salvato (accuracy e loss)
-  4) Estrae l'iterazione migliore da algorithm_logs/hyper-neural.txt
-     usando score_report.txt (o acc_report.txt come fallback)
-  5) Ricrea lo stesso modello con il backend del config (tf o torch)
-  6) Ri-addestra e testa
+Steps:
+  1) Load  Model/best-model.keras
+  2) Load  the dataset described in the experiment's config.yaml
+  3) Test  the saved model  (accuracy and loss)
+  4) Find  the best iteration from algorithm_logs/hyper-neural.txt
+           using score_report.txt as the index (acc_report.txt as fallback)
+  5) Rebuild the same architecture with the configured backend (tf or torch)
+  6) Retrain and test  (only when --retrain is passed)
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 def _load_dataset(dataset_name: str):
-    """Istanzia e carica il TunerDataset corretto."""
+    """Instantiate and load the correct TunerDataset for the given dataset name."""
     from components.dataset import TunerDataset
 
     ds = TunerDataset()
@@ -56,74 +56,91 @@ def _load_dataset(dataset_name: str):
         ds.load_beans()
     else:
         raise ValueError(
-            f"Dataset '{dataset_name}' non riconosciuto. "
-            "Supportati: cifar10, cifar100, mnist, beans, light, gesture, "
+            f"Unknown dataset '{dataset_name}'. "
+            "Supported: cifar10, cifar100, mnist, beans, light, gesture, "
             "roigesture_*, tinyimagenet, cca, cim."
         )
     return ds
 
 
 def _find_best_iteration(algo_logs: Path) -> int:
-    """Restituisce l'indice (0-based) dell'iterazione migliore."""
+    """
+    Return the 0-based index of the best tuning iteration.
+
+    Priority:
+      1. score_report.txt  – lower is better  (minimise combined score)
+      2. acc_report.txt    – higher is better (maximise validation accuracy)
+    """
     score_path = algo_logs / "score_report.txt"
     acc_path = algo_logs / "acc_report.txt"
 
     if score_path.exists():
+        # Parse all non-empty, non-"None" lines as floats
         values = [
             float(l.strip())
             for l in score_path.read_text().splitlines()
             if l.strip() and l.strip().lower() != "none"
         ]
         if not values:
-            raise ValueError(f"score_report.txt è vuoto in {algo_logs}")
+            raise ValueError(f"score_report.txt is empty in {algo_logs}")
+        # The best iteration has the lowest combined score
         best_idx = min(range(len(values)), key=lambda i: values[i])
         print(
-            f"[Selezione] score_report.txt – iterazione migliore: {best_idx} "
+            f"[Selection] score_report.txt — best iteration: {best_idx} "
             f"(score={values[best_idx]:.4f})"
         )
     elif acc_path.exists():
+        # Fallback: use validation accuracy (higher is better)
         values = [
             float(l.strip())
             for l in acc_path.read_text().splitlines()
             if l.strip() and l.strip().lower() != "none"
         ]
         if not values:
-            raise ValueError(f"acc_report.txt è vuoto in {algo_logs}")
+            raise ValueError(f"acc_report.txt is empty in {algo_logs}")
         best_idx = max(range(len(values)), key=lambda i: values[i])
         print(
-            f"[Selezione] acc_report.txt – iterazione migliore: {best_idx} "
+            f"[Selection] acc_report.txt — best iteration: {best_idx} "
             f"(acc={values[best_idx]:.4f})"
         )
     else:
         raise FileNotFoundError(
-            f"Nessun score_report.txt né acc_report.txt trovato in {algo_logs}"
+            f"Neither score_report.txt nor acc_report.txt found in {algo_logs}"
         )
 
     return best_idx
 
 
 def _load_best_params(algo_logs: Path, best_idx: int) -> dict:
-    """Legge la riga best_idx da hyper-neural.txt e la converte in dict."""
+    """Read line best_idx from hyper-neural.txt and parse it into a dict."""
     hyper_path = algo_logs / "hyper-neural.txt"
     if not hyper_path.exists():
-        raise FileNotFoundError(f"hyper-neural.txt non trovato in {algo_logs}")
+        raise FileNotFoundError(f"hyper-neural.txt not found in {algo_logs}")
 
+    # Each line is a Python dict literal written by ObjectiveWrapper.objective()
     lines = [l.strip() for l in hyper_path.read_text().splitlines() if l.strip()]
     if best_idx >= len(lines):
         raise IndexError(
-            f"best_idx={best_idx} fuori range: hyper-neural.txt ha {len(lines)} righe."
+            f"best_idx={best_idx} out of range: hyper-neural.txt has {len(lines)} lines."
         )
+    # Safe parse: ast.literal_eval handles plain dict literals without executing code
     params = ast.literal_eval(lines[best_idx])
-    print(f"[Iperparametri] {params}")
+    print(f"[Hyperparams] {params}")
     return params
 
 
 def _find_layer_x_block(experiment: Path, best_idx: int) -> int:
     """
-    Cerca layer_x_block nel file .out dell'esperimento (blocco dell'iterazione
-    migliore). Ritorna 2 come fallback se non trovato.
+    Extract the layer_x_block value used at iteration best_idx from the SLURM
+    .out file produced during the tuning run.
+
+    The log line has the form:
+        Building model with input_shape=(...), ..., layer_x_block=N
+
+    Search order: experiment directory first, then the current working directory.
+    Falls back to 2 if no matching .out file is found.
     """
-    # Cerca prima nella dir dell'esperimento, poi nella cwd
+    # Look inside the experiment dir first, then the cwd (where sbatch saves .out)
     search_dirs = [experiment, Path(".")]
     for d in search_dirs:
         out_files = sorted(d.glob("*.out"))
@@ -132,63 +149,66 @@ def _find_layer_x_block(experiment: Path, best_idx: int) -> int:
                 text = out_file.read_text(errors="replace")
             except OSError:
                 continue
+            # Split the log by iteration banners to isolate each iteration block
             blocks = re.split(r"---\s*ITERATION\s+\d+\s*---", text)
             if best_idx + 1 < len(blocks):
                 match = re.search(r"layer_x_block=(\d+)", blocks[best_idx + 1])
                 if match:
                     val = int(match.group(1))
                     print(
-                        f"[layer_x_block] Trovato={val} in '{out_file.name}' "
-                        f"(iterazione {best_idx})"
+                        f"[layer_x_block] Found={val} in '{out_file.name}' "
+                        f"(iteration {best_idx})"
                     )
                     return val
 
-    print("[layer_x_block] Non trovato nel file .out – uso default=2")
+    print("[layer_x_block] Not found in any .out file — using default=2")
     return 2
 
 
 def _eval_keras_model(model, dataset, cfg) -> tuple[float, float]:
     """
-    Valuta un modello Keras caricato da disco su X_test / Y_test.
-    Restituisce (loss, accuracy).
+    Evaluate a Keras model loaded from disk against the test split.
+
+    Handles three dataset variants:
+      - Standard image datasets  (single input, integer or one-hot labels)
+      - ROI gesture datasets     (dual input: [image, position map])
+      - Temporal gesture datasets (frame-by-frame forward pass via test_utils)
+
+    Returns:
+        (loss, accuracy) as plain Python floats.
     """
-    import numpy as np
     import tensorflow as tf
 
     n_classes = dataset.n_classes
 
-    # Converti le label in one-hot se necessario
+    # One-hot encode integer labels to match the training target format
     y_test = dataset.Y_test
     if y_test.ndim == 1:
         y_test = tf.keras.utils.to_categorical(y_test, n_classes)
 
     x_test = dataset.X_test.astype("float32")
 
-    # Determina la loss da usare in base all'output shape del modello
-    out_shape = model.output_shape
-    if isinstance(out_shape, list):
-        # modello multi-output (es. ROI)
-        loss = "categorical_crossentropy"
-    else:
-        loss = "categorical_crossentropy"
+    # Compile with the same loss used during training; no optimizer needed for eval
+    model.compile(loss="categorical_crossentropy", optimizer="adam", metrics=["accuracy"])
 
-    model.compile(loss=loss, optimizer="adam", metrics=["accuracy"])
-
+    # Detect dataset variant
     is_roi = hasattr(dataset, "pos_test") and dataset.pos_test is not None
-    is_gesture = (
-        (cfg.mode in ("fwdPass", "hybrid")) and ("gesture" in cfg.dataset)
-    )
+    is_gesture = (cfg.mode in ("fwdPass", "hybrid")) and ("gesture" in cfg.dataset)
 
     if is_gesture:
+        # Temporal evaluation: iterate over time frames and vote by majority
         from test_utils import eval_model as gesture_eval
-        score = gesture_eval(model, x_test if not is_roi else [x_test, dataset.pos_test], y_test)
+        x_input = [x_test, dataset.pos_test] if is_roi else x_test
+        score = gesture_eval(model, x_input, y_test)
     elif is_roi:
+        # Dual-input model: pass both image and position map
         score = model.evaluate([x_test, dataset.pos_test.astype("float32")], y_test, verbose=2)
     else:
+        # Standard single-input evaluation
         score = model.evaluate(x_test, y_test, verbose=2)
 
     loss_val, acc_val = float(score[0]), float(score[1])
-    print(f"[Valutazione modello salvato] loss={loss_val:.4f}  accuracy={acc_val:.4f}")
+    print(f"[Saved model evaluation] loss={loss_val:.4f}  accuracy={acc_val:.4f}")
     return loss_val, acc_val
 
 
@@ -198,41 +218,49 @@ def _eval_keras_model(model, dataset, cfg) -> tuple[float, float]:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Testa e ri-addestra un esperimento Symbolic DNN Tuner."
+        description="Evaluate and optionally retrain a Symbolic DNN Tuner experiment."
     )
     parser.add_argument(
         "--experiment", required=True,
-        help="Percorso della directory dell'esperimento (contiene config.yaml)."
+        help="Path to the experiment directory (must contain config.yaml)."
     )
     parser.add_argument(
         "--epochs", type=int, default=None,
-        help="Sovrascrive il numero di epoche per il ri-addestramento (opzionale)."
+        help="Override the number of training epochs (optional)."
     )
     parser.add_argument(
         "--backend", type=str, default=None, choices=["tf", "torch"],
-        help="Sovrascrive il backend (tf o torch) per il ri-addestramento (opzionale)."
+        help="Override the backend framework for retraining: 'tf' or 'torch' (optional)."
+    )
+    parser.add_argument(
+        "--retrain", action="store_true", default=False,
+        help="Rebuild the best architecture and retrain from scratch (steps 5-6). "
+             "If omitted, only evaluation of the saved model is performed (steps 1-3)."
     )
     args = parser.parse_args()
 
     experiment = Path(args.experiment).expanduser().resolve()
     if not experiment.is_dir():
-        print(f"[ERRORE] Directory non trovata: {experiment}", file=sys.stderr)
+        print(f"[ERROR] Directory not found: {experiment}", file=sys.stderr)
         sys.exit(1)
 
     config_path = experiment / "config.yaml"
     if not config_path.exists():
-        print(f"[ERRORE] config.yaml non trovato in {experiment}", file=sys.stderr)
+        print(f"[ERROR] config.yaml not found in {experiment}", file=sys.stderr)
         sys.exit(1)
 
-    # ── 0. Imposta il config attivo ──────────────────────────────────────────
+    # ── 0. Activate the experiment config ────────────────────────────────────
+    # exp_config uses an environment variable (EXP_CONFIG) to locate the active
+    # config.yaml; set_active_config writes that variable for the current process.
     from exp_config import set_active_config, load_cfg, reload_cfg
 
     set_active_config(config_path)
     cfg = load_cfg(force=True)
 
-    # Applica eventuali override da CLI
+    # Apply CLI overrides by patching config.yaml in-place and reloading.
+    # This ensures that any component reading load_cfg() picks up the new values.
     if args.epochs is not None or args.backend is not None:
-        import yaml, os as _os
+        import yaml
 
         with open(config_path, "r") as f:
             raw = yaml.safe_load(f)
@@ -245,61 +273,87 @@ def main():
         cfg = reload_cfg()
 
     print(f"\n{'='*60}")
-    print(f"Esperimento : {experiment.name}")
+    print(f"Experiment  : {experiment.name}")
     print(f"Dataset     : {cfg.dataset}")
     print(f"Backend     : {cfg.backend}")
-    print(f"Epoche      : {cfg.epochs}")
+    print(f"Epochs      : {cfg.epochs}")
+    print(f"Retrain     : {args.retrain}")
     print(f"{'='*60}\n")
 
-    # ── 1. Carica il modello Keras salvato ───────────────────────────────────
+    # ── 1. Load the saved Keras model ────────────────────────────────────────
+    # load_keras_model (test_utils) registers LayerWiseLR as a custom object so
+    # that models saved with that optimizer can be deserialized correctly.
     keras_model_path = experiment / "Model" / "best-model.keras"
     if not keras_model_path.exists():
         print(
-            f"[AVVISO] {keras_model_path} non trovato. "
-            "Salto la valutazione del modello pre-addestrato."
+            f"[WARNING] {keras_model_path} not found. "
+            "Skipping pre-trained model evaluation."
         )
         saved_model = None
     else:
-        print(f"\n[1] Caricamento modello da: {keras_model_path}")
+        print(f"\n[1] Loading model from: {keras_model_path}")
         from test_utils import load_keras_model
         saved_model = load_keras_model(str(keras_model_path))
-        print("[1] Modello caricato.")
+        print("[1] Model loaded.")
 
-    # ── 2. Carica il dataset ─────────────────────────────────────────────────
-    print(f"\n[2] Caricamento dataset '{cfg.dataset}'...")
+    # ── 2. Load the dataset ───────────────────────────────────────────────────
+    print(f"\n[2] Loading dataset '{cfg.dataset}'...")
     dataset = _load_dataset(cfg.dataset)
+    # Ensure float32 dtype for both frameworks (avoids silent type mismatches)
     dataset.data_as_float32()
-    print(f"[2] Dataset caricato: {dataset.X_train.shape[0]} train / {dataset.X_test.shape[0]} test campioni.")
+    print(
+        f"[2] Dataset loaded: "
+        f"{dataset.X_train.shape[0]} train / {dataset.X_test.shape[0]} test samples."
+    )
 
-    # ── 3. Testa il modello salvato ──────────────────────────────────────────
+    # ── 3. Evaluate the pre-trained model ────────────────────────────────────
     if saved_model is not None:
-        print("\n[3] Valutazione del modello pre-addestrato (best-model.keras)...")
+        print("\n[3] Evaluating pre-trained model (best-model.keras)...")
         saved_loss, saved_acc = _eval_keras_model(saved_model, dataset, cfg)
     else:
-        print("\n[3] Nessun modello pre-addestrato da valutare.")
+        print("\n[3] No pre-trained model to evaluate.")
 
-    # ── 4. Estrai il punto dell'iterazione migliore ──────────────────────────
+    # ── 4. Extract the best iteration point ──────────────────────────────────
+    # algorithm_logs/ contains one line per iteration for scores, accuracies
+    # and hyperparameters; these are written by controller.log() and
+    # ObjectiveWrapper.objective() during the tuning run.
     algo_logs = experiment / "algorithm_logs"
-    print(f"\n[4] Ricerca iterazione migliore in {algo_logs} ...")
+    print(f"\n[4] Finding best iteration in {algo_logs} ...")
     best_idx = _find_best_iteration(algo_logs)
     best_params = _load_best_params(algo_logs, best_idx)
     layer_x_block = _find_layer_x_block(experiment, best_idx)
     print(f"[4] layer_x_block={layer_x_block}")
 
-    # ── 5–6. Ricrea il modello con il backend scelto e ri-addestra ───────────
-    print(f"\n[5] Ricreazione del modello con backend='{cfg.backend}'...")
+    # ── 5–6. Rebuild + retrain (only when --retrain is passed) ───────────────
+    if not args.retrain:
+        # Only print a summary of what was found and exit cleanly
+        print(f"\n{'='*60}")
+        print("SUMMARY  (evaluation only — pass --retrain to rebuild and retrain)")
+        if saved_model is not None:
+            print(f"  Pre-trained model  →  loss={saved_loss:.4f}  acc={saved_acc:.4f}")
+        print(f"  Best iteration     : {best_idx}")
+        print(f"  layer_x_block      : {layer_x_block}")
+        print(f"  Hyperparameters    : {best_params}")
+        print(f"{'='*60}\n")
+        return
+
+    # ── 5. Rebuild the architecture with the configured backend ──────────────
+    print(f"\n[5] Rebuilding model with backend='{cfg.backend}'...")
 
     if cfg.backend == "tf":
         from tensorflow_implementation import module_backend, neural_network
+        # Clear the Keras session to release GPU memory from the loaded model
         from tensorflow.keras import backend as K
         K.clear_session()
     elif cfg.backend == "torch":
         from pytorch_implementation import module_backend, neural_network
     else:
-        print(f"[ERRORE] Backend non supportato: {cfg.backend}", file=sys.stderr)
+        print(f"[ERROR] Unsupported backend: {cfg.backend}", file=sys.stderr)
         sys.exit(1)
 
     backend_instance = module_backend.ModuleBackend()
+    # NeuralNetwork wraps the framework-specific model and handles training;
+    # da/reg/residual are set to False — the hyperparams dict controls them.
     nn = neural_network.NeuralNetwork(
         backend=backend_instance,
         dataset=dataset,
@@ -308,25 +362,28 @@ def main():
         residual=False,
     )
 
+    # build_network creates the model graph from the hyperparameter dict
     nn.build_network(best_params, layer_x_block=layer_x_block)
-    print(f"[5] Modello costruito (backend={cfg.backend}).")
+    print(f"[5] Model built (backend={cfg.backend}).")
 
-    print(f"\n[6] Ri-addestramento per {cfg.epochs} epoche...")
+    # ── 6. Retrain from scratch and evaluate ─────────────────────────────────
+    print(f"\n[6] Retraining for {cfg.epochs} epoch(s)...")
+    # training() compiles, fits with early stopping, and returns the best score
     score, history, trained_model = nn.training(best_params)
 
     retrain_loss = float(score[0])
     retrain_acc = float(score[1])
-    print(f"\n[6] Risultati ri-addestramento: loss={retrain_loss:.4f}  accuracy={retrain_acc:.4f}")
+    print(f"\n[6] Retrain results: loss={retrain_loss:.4f}  accuracy={retrain_acc:.4f}")
 
-    # ── Riepilogo ────────────────────────────────────────────────────────────
+    # ── Summary ───────────────────────────────────────────────────────────────
     print(f"\n{'='*60}")
-    print("RIEPILOGO")
+    print("SUMMARY")
     if saved_model is not None:
-        print(f"  Modello pre-addestrato  →  loss={saved_loss:.4f}  acc={saved_acc:.4f}")
-    print(f"  Modello ri-addestrato   →  loss={retrain_loss:.4f}  acc={retrain_acc:.4f}")
-    print(f"  Iterazione usata        : {best_idx}")
-    print(f"  layer_x_block           : {layer_x_block}")
-    print(f"  Iperparametri           : {best_params}")
+        print(f"  Pre-trained model  →  loss={saved_loss:.4f}  acc={saved_acc:.4f}")
+    print(f"  Retrained model    →  loss={retrain_loss:.4f}  acc={retrain_acc:.4f}")
+    print(f"  Best iteration     : {best_idx}")
+    print(f"  layer_x_block      : {layer_x_block}")
+    print(f"  Hyperparameters    : {best_params}")
     print(f"{'='*60}\n")
 
 
