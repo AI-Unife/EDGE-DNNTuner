@@ -325,6 +325,18 @@ def main():
     print(f"[4] layer_x_block={layer_x_block}")
 
     # ── 5–6. Rebuild + retrain (only when --retrain is passed) ───────────────
+
+    # cfg.name is the *relative* path stored in config.yaml at the time the
+    # tuning run was launched (e.g. "results_gesture_new/26_03_...").
+    # All file I/O inside training() (JSON model dump, dashboard save, etc.)
+    # uses that relative path, so it only works if the CWD matches the original
+    # launch directory.  We reconstruct that base directory from the known
+    # absolute experiment path and the relative cfg.name, then chdir() into it.
+    cfg_name_parts = Path(cfg.name).parts
+    base_dir = experiment
+    for _ in cfg_name_parts:
+        base_dir = base_dir.parent
+
     if not args.retrain:
         # Only print a summary of what was found and exit cleanly
         print(f"\n{'='*60}")
@@ -338,7 +350,12 @@ def main():
         return
 
     # ── 5. Rebuild the architecture with the configured backend ──────────────
-    print(f"\n[5] Rebuilding model with backend='{cfg.backend}'...")
+    # Change to the original launch directory so that all relative paths used
+    # by training() (e.g. "{cfg.name}/Model/...") resolve correctly.
+    print(f"\n[5] Changing working directory to: {base_dir}")
+    os.chdir(base_dir)
+
+    print(f"[5] Rebuilding model with backend='{cfg.backend}'...")
 
     if cfg.backend == "tf":
         from tensorflow_implementation import module_backend, neural_network
