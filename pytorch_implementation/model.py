@@ -19,21 +19,17 @@ class ConvBlock(nn.Module):
         self.activation = activation_fn
         self.batch = batch
         
-        # 1. Build the first N-1 layers (Conv -> Act -> BN)
-        # Note: In PyTorch the common order is Conv -> BN -> Act, but here we replicate
-        # the Keras Conv -> Act -> BN logic or similar depending on preferences.
-        # Modern standard: Conv -> BN -> Act.
-        
+        # 1. Build the first N-1 layers — order matches TF: Conv -> Act -> BN
         current_in = in_channels
         
         # Add (num_repeats - 1) standard blocks
         for _ in range(num_repeats - 1):
             self.layers.append(nn.Sequential(
                 nn.Conv2d(current_in, out_channels, kernel_size=3, padding=1, bias=False),
+                copy.deepcopy(activation_fn),
                 nn.BatchNorm2d(out_channels) if batch else nn.Identity(),
-                activation_fn
             ))
-            current_in = out_channels # After the first one, input is out_channels
+            current_in = out_channels  # After the first one, input is out_channels
 
         # 2. The last layer of the block (before the residual sum)
         self.last_conv = nn.Conv2d(current_in, out_channels, kernel_size=3, padding=1, bias=False)
@@ -52,22 +48,24 @@ class ConvBlock(nn.Module):
 
     def forward(self, x):
         out = x
-        
-        # Forward pass through the first N-1 layers
+
+        # Forward pass through the first N-1 layers (Conv -> Act -> BN)
         for layer in self.layers:
             out = layer(out)
-            
-        # Last convolutional layer (no activation yet)
+
+        # Last convolutional layer
         out = self.last_conv(out)
-        out = self.last_bn(out) if self.batch else out
-        
-        # Residual application
+
         if self.use_residual:
-            # x + F(x)
+            # TF _add_residual: Conv -> Add(shortcut, x) -> Act  (no BN after Add)
             out = out + self.shortcut(x)
-        
-        # Final activation after the sum (standard ResNet)
-        out = self.activation(out)
+            out = self.activation(out)
+        else:
+            # TF non-residual: Conv -> Act -> [BN]
+            out = self.activation(out)
+            if self.batch:
+                out = self.last_bn(out)
+
         return out
 
 
@@ -96,15 +94,20 @@ class TorchModel(nn.Module, TunerModel):
     # Reverse mapping from PyTorch modules back to custom layer types
     to_type_map = {v: k for k, v in from_type_map.items()}
 
-    def __init__(self, input_shape, params, n_classes, layer_x_block=2, batch=True):
+    def __init__(self, input_shape, params, n_classes, layer_x_block=2, batch=True,
+                 is_roi=False, pos_input_shape=None):
         """
         Initialize the model with the given configuration.
         
         Args:
-            input_shape: Tuple of (height, width, channels) for input images
-            params: Dictionary containing hyperparameters for layer dimensions
-            n_classes: Number of output classes
-            activation_function: The activation function to use throughout the model
+            input_shape:     (C, H, W) per-frame input dimensions.
+            params:          Hyperparameter dict.
+            n_classes:       Number of output classes.
+            layer_x_block:   Convolutions per block (min 2 to match TF behaviour).
+            batch:           Enable BatchNorm (True only for tiny-imagenet / cim).
+            is_roi:          Whether the dataset provides a position map input.
+            pos_input_shape: Shape of the position map (e.g. (4, 16, 16)); ignored
+                             when is_roi=False.
         """
         super(TorchModel, self).__init__()
         
@@ -114,6 +117,8 @@ class TorchModel(nn.Module, TunerModel):
         self.activation = self._get_activation(params['activation'])
         self.batch = batch
         self.layer_x_block = layer_x_block
+        self.is_roi = is_roi
+        self.pos_input_shape = pos_input_shape
         
             # Parameter parsing
         self.use_residual = params.get('skip_connection', False)
@@ -130,11 +135,19 @@ class TorchModel(nn.Module, TunerModel):
         self.features = nn.Sequential()
         in_c = input_shape[0] # (Channels, H, W)
         
+        # TF always executes a mandatory first conv before the loop, so the
+        # minimum number of convolutions per block is 2 regardless of layer_x_block.
+        # In TF only C1 has an unconditional "first conv" outside the loop, so:
+        #   C1            → max(2, layer_x_block) total convolutions
+        #   C2 + added    → layer_x_block total convolutions  (min 1)
+        _c1_repeats    = max(2, layer_x_block)
+        _other_repeats = max(1, layer_x_block)  # C2 and new_conv_* blocks
+
         # 1. Blocco C1
         self.features.add_module("block_c1", ConvBlock(
             in_channels=in_c, 
             out_channels=c1_channels, 
-            num_repeats=layer_x_block, 
+            num_repeats=_c1_repeats, 
             activation_fn=act_fn, 
             use_residual=self.use_residual,
             batch=self.batch
@@ -145,7 +158,7 @@ class TorchModel(nn.Module, TunerModel):
         self.features.add_module("block_c2", ConvBlock(
             in_channels=c1_channels, 
             out_channels=c2_channels, 
-            num_repeats=layer_x_block, 
+            num_repeats=_other_repeats, 
             activation_fn=act_fn, 
             use_residual=self.use_residual,
             batch=self.batch
@@ -153,38 +166,56 @@ class TorchModel(nn.Module, TunerModel):
         self.features.add_module("pool2", nn.MaxPool2d(2))
         in_channels = c2_channels
         added_convs = [k for k in params if re.match(r"new_conv_\d+$", k) and params[k] > 0]
-        for layer_key in sorted(added_convs, key=lambda s: int(s.split("_")[-1])):  # stable order
+        for layer_key in sorted(added_convs, key=lambda s: int(s.split("_")[-1])):
             val = params[layer_key]
             out_c = int(val * params['num_neurons'])
             self.features.add_module(f"added_conv_{layer_key}", ConvBlock(
                 in_channels=in_channels,
                 out_channels=out_c,
-                num_repeats=layer_x_block,
+                num_repeats=_other_repeats,
                 activation_fn=act_fn,
                 use_residual=self.use_residual,
                 batch=self.batch
             ))
             self.features.add_module(f"pool_{layer_key}", nn.MaxPool2d(2))
-            in_channels = out_c  # Update for next layer if any
+            in_channels = out_c
 
         # --- CLASSIFICATORE (Fully Connected) ---
-        # Calcolo dimensione flatten automatico
+        # Compute flatten dimension from a dummy forward pass through features.
         with torch.no_grad():
             dummy = torch.zeros(1, *input_shape)
             out_feat = self.features(dummy)
-            
-            # If pooling is done in forward, it must be done here too!
             if self.batch:
                 out_feat = F.adaptive_avg_pool2d(out_feat, (1, 1))
-            
-            # Now flatten will give the correct dimension (e.g., 16 instead of 1024)
             self.flat_dim = out_feat.view(1, -1).size(1)
-            
+
+        # For ROI datasets, flatten and concatenate the position map exactly as TF:
+        #   Flatten(features) + Flatten(pos_map) -> Concatenate -> Dense
+        if self.is_roi and pos_input_shape is not None:
+            self.pos_flat_dim = 1
+            for d in pos_input_shape:
+                self.pos_flat_dim *= d
+        else:
+            self.pos_flat_dim = 0
+
         self.classifier = nn.Sequential()
-        current_dim = self.flat_dim
+        current_dim = self.flat_dim + self.pos_flat_dim
         
-        # Dynamically add FC layers (new_fc_1, new_fc_2, etc.)
-        fc_keys = sorted([k for k in params.keys() if re.match(r'new_fc_\d+', k)], 
+        # Static FC layers — fc_1, fc_2, … (same as TF's first fc loop)
+        # These are fixed layers added by the controller (not dynamic new_fc_*).
+        static_fc_keys = sorted(
+            [k for k in params.keys() if re.match(r'^fc_\d+$', k) and params[k] > 0],
+            key=lambda s: int(s.split('_')[-1])
+        )
+        for i, key in enumerate(static_fc_keys):
+            out_dim = int(params[key] * params['num_neurons'])
+            self.classifier.add_module(f"sfc_{i}",   nn.Linear(current_dim, out_dim))
+            self.classifier.add_module(f"sact_{i}",  copy.deepcopy(act_fn))
+            self.classifier.add_module(f"sdrop_{i}", nn.Dropout(params['dr_f']))
+            current_dim = out_dim
+
+        # Dynamically added FC layers (new_fc_1, new_fc_2, etc.)
+        fc_keys = sorted([k for k in params.keys() if re.match(r'new_fc_\d+', k)],
                          key=lambda x: int(x.split('_')[-1]))
         
         for i, key in enumerate(fc_keys):
@@ -308,6 +339,10 @@ class TorchModel(nn.Module, TunerModel):
             if self.batch:
                 x = F.adaptive_avg_pool2d(x, (1, 1))
             x = torch.flatten(x, 1)
+            # For ROI models, concatenate a zero pos tensor to match classifier input size
+            if self.is_roi and self.pos_input_shape is not None:
+                dummy_pos = torch.zeros(1, self.pos_flat_dim)
+                x = torch.cat([x, dummy_pos], dim=1)
             
             for name, module in self.classifier.named_children():
                 x = module(x)
@@ -329,12 +364,16 @@ class TorchModel(nn.Module, TunerModel):
             self.train()
 
 
-    def forward(self, x):
+    def forward(self, x, pos=None):
         x = self.features(x)
         if self.batch:
             # Global Average Pooling: (N, C, H, W) -> (N, C, 1, 1)
             x = F.adaptive_avg_pool2d(x, (1, 1))
-        x = torch.flatten(x, 1)
+        x = torch.flatten(x, 1)                     # (N, flat_dim)
+        if self.is_roi and pos is not None:
+            # Replicate TF: Flatten(pos_map) then Concatenate with image features
+            pos_flat = pos.view(pos.shape[0], -1)    # (N, pos_flat_dim)
+            x = torch.cat([x, pos_flat], dim=1)      # (N, flat_dim + pos_flat_dim)
         x = self.classifier(x)
         return x
     
@@ -362,10 +401,16 @@ class TorchModel(nn.Module, TunerModel):
                 if module.__class__ in self.to_type_map:
                     hooks.append(module.register_forward_hook(make_hook(name)))
 
+        # For ROI models the forward pass requires a pos tensor; provide a zero
+        # dummy so the classifier's Linear layer receives the correct input size.
+        dummy_pos = None
+        if self.is_roi and self.pos_input_shape is not None:
+            dummy_pos = torch.zeros([1, *self.pos_input_shape])
+
         # Perform forward pass to trigger hooks
         self.layers = {}
         with torch.no_grad():
-            self(dummy_input)
+            self(dummy_input, dummy_pos)
 
         # Clean up hooks
         for hook in hooks:

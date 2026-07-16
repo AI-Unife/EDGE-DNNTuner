@@ -22,9 +22,11 @@ from pytorch_implementation.model import TorchModel
 
 
 class TorchTunerDataset(Dataset):
-    def __init__(self, images: torch.Tensor, labels: torch.Tensor, transform=None):
+    def __init__(self, images: torch.Tensor, labels: torch.Tensor,
+                 pos: torch.Tensor = None, transform=None):
         self.images = images
         self.labels = labels
+        self.pos = pos          # None for non-ROI datasets
         self.transform = transform
 
     def __len__(self):
@@ -34,6 +36,8 @@ class TorchTunerDataset(Dataset):
         image = self.images[index]
         if self.transform:
             image = self.transform(image)
+        if self.pos is not None:
+            return image, self.labels[index], self.pos[index]
         return image, self.labels[index]
     
 
@@ -54,8 +58,32 @@ class NeuralNetwork(BaseNeuralNetwork):
 
         self.train_images = self.to_tensor(self.train_data)
         self.test_images = self.to_tensor(self.test_data)
-        self.train_labels = torch.from_numpy(self.dataset.Y_train).long().view(-1)
-        self.test_labels = torch.from_numpy(self.dataset.Y_test).long().view(-1)
+        # Y_train may be:
+        #   [N]          integer labels  (standard datasets)
+        #   [N, C]       one-hot         (TF-converted datasets)
+        #   [N, T, C]    temporal one-hot (gesture ToOneHotTimeCoding)
+        # PyTorch CrossEntropyLoss always needs 1-D integer class indices [N].
+        self.train_labels = torch.from_numpy(
+            self._extract_int_labels(self.dataset.Y_train)
+        ).long()
+        self.test_labels = torch.from_numpy(
+            self._extract_int_labels(self.dataset.Y_test)
+        ).long()
+
+        # Convert position maps to tensors for ROI datasets.
+        # pos arrays have shape (N, T, H, W, C) or (N, C, H, W) depending on mode;
+        # keep the original numpy layout and convert to float32 tensor without
+        # reordering axes — the model flattens them entirely.
+        if self.is_roi and hasattr(self.dataset, 'pos_train') and self.dataset.pos_train is not None:
+            self.train_pos = torch.from_numpy(
+                self.dataset.pos_train.astype('float32')
+            )
+            self.test_pos = torch.from_numpy(
+                self.dataset.pos_test.astype('float32')
+            )
+        else:
+            self.train_pos = None
+            self.test_pos = None
 
         self.activation_map = {
             "relu": nn.ReLU,
@@ -75,6 +103,26 @@ class NeuralNetwork(BaseNeuralNetwork):
         }
     
     @staticmethod
+    def _extract_int_labels(y: np.ndarray) -> np.ndarray:
+        """
+        Convert any label format to a 1-D integer class-index array [N].
+
+        Handles:
+          y.ndim == 1  → already integer [N], return as-is
+          y.ndim == 2  → one-hot [N, C], take argmax over last axis
+          y.ndim == 3  → temporal one-hot [N, T, C] (ToOneHotTimeCoding),
+                         all frames carry the same label so take frame 0
+        """
+        if y.ndim == 1:
+            return y.astype(np.int64)
+        elif y.ndim == 2:
+            return np.argmax(y, axis=-1).astype(np.int64)
+        elif y.ndim == 3:
+            return np.argmax(y[:, 0, :], axis=-1).astype(np.int64)
+        else:
+            raise ValueError(f"Unsupported label shape: {y.shape}")
+
+    @staticmethod
     def to_tensor(array):
         if array.ndim == 3:
             # (N, H, W) → (N, H, W, 1)
@@ -89,7 +137,7 @@ class NeuralNetwork(BaseNeuralNetwork):
         else:
             return t.contiguous().float()
     
-    def _model_forward(self, inputs: torch.Tensor) -> torch.Tensor:
+    def _model_forward(self, inputs: torch.Tensor, pos: torch.Tensor = None) -> torch.Tensor:
         """
         Run a forward pass through the model, handling both standard 4D input
         (N, C, H, W) and temporal 5D input (N, T, C, H, W).
@@ -97,16 +145,25 @@ class NeuralNetwork(BaseNeuralNetwork):
         For temporal data each frame is processed independently; the per-frame
         logits are averaged across the time dimension before returning, so the
         output is always (N, n_classes) regardless of the number of frames.
+
+        pos is the flattened position map (N, *pos_shape) for ROI datasets;
+        it is forwarded to TorchModel.forward which concatenates it to features.
         """
         if inputs.ndim == 5:
             N, T, C, H, W = inputs.shape
             # Flatten the time dimension into the batch dimension
             flat = inputs.view(N * T, C, H, W)
-            # Run all frames in a single forward pass (more efficient than a loop)
-            out_flat = self.model(flat)          # (N*T, n_classes)
-            # Average logits across frames to produce one prediction per sequence
-            return out_flat.view(N, T, -1).mean(dim=1)  # (N, n_classes)
-        return self.model(inputs)
+            # Expand pos along the time axis so each frame gets its own pos slice
+            pos_flat = None
+            if pos is not None:
+                # pos shape: (N, T, ...) or (N, ...) — expand to (N*T, ...)
+                if pos.ndim >= 2 and pos.shape[1] == T:
+                    pos_flat = pos.view(N * T, *pos.shape[2:])
+                else:
+                    pos_flat = pos.unsqueeze(1).expand(N, T, *pos.shape[1:]).reshape(N * T, *pos.shape[1:])
+            out_flat = self.model(flat, pos_flat)    # (N*T, n_classes)
+            return out_flat.view(N, T, -1).mean(dim=1)
+        return self.model(inputs, pos)
 
     def build_network(self, params, layer_x_block=2):
         """
@@ -121,12 +178,29 @@ class NeuralNetwork(BaseNeuralNetwork):
             input_shape = self.dataset.X_train.shape[1:]  # (H, W, C)
             self.input_shape = (input_shape[2], input_shape[0], input_shape[1])  # (C, H, W)
 
+        # Match TF logic: BatchNorm in conv blocks only for tiny-imagenet and cim datasets
+        dataset_name = self.exp_cfg.dataset.lower()
+        use_bn = "tiny" in dataset_name or "cim" in dataset_name
+
+        # Derive pos_input_shape from the dataset for ROI models.
+        # Must match TF's logic: pos_train.shape[2:] (dropping batch and time dims)
+        # so the model sees the per-frame pos shape, e.g. (4, 16, 16).
+        pos_input_shape = None
+        if self.is_roi and self.train_pos is not None:
+            if self.train_pos.ndim >= 3:
+                # Temporal: (N, T, ...) → per-frame = shape[2:]
+                pos_input_shape = tuple(self.train_pos.shape[2:])
+            else:
+                pos_input_shape = tuple(self.train_pos.shape[1:])
+
         self.model = TorchModel(
             params=params,
             input_shape=self.input_shape,
             n_classes=self.dataset.n_classes,
             layer_x_block=layer_x_block,
-            batch=True
+            batch=use_bn,
+            is_roi=self.is_roi,
+            pos_input_shape=pos_input_shape,
         ).to(self.device)
 
         print("Model Summary:")
@@ -239,10 +313,18 @@ class NeuralNetwork(BaseNeuralNetwork):
         else:
             transform = None
 
-        train_dataset = TorchTunerDataset(self.train_images, self.train_labels, transform=transform)
+        # Pass pos tensors to the dataset when ROI is active so the loader
+        # returns (inputs, labels, pos) triplets instead of (inputs, labels) pairs.
+        train_dataset = TorchTunerDataset(
+            self.train_images, self.train_labels,
+            pos=self.train_pos, transform=transform
+        )
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0)
 
-        test_dataset = TorchTunerDataset(self.test_images, self.test_labels, transform=None)
+        test_dataset = TorchTunerDataset(
+            self.test_images, self.test_labels,
+            pos=self.test_pos, transform=None
+        )
         test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
 
         # Training loop
@@ -275,11 +357,19 @@ class NeuralNetwork(BaseNeuralNetwork):
             else:
                 self.model.train()
                 running_loss, correct = 0.0, 0
-                for inputs, labels in train_loader:
+                for batch in train_loader:
+                    # Unpack: (inputs, labels) for standard datasets,
+                    #         (inputs, labels, pos) for ROI datasets
+                    if len(batch) == 3:
+                        inputs, labels, pos = batch
+                        pos = pos.to(self.device)
+                    else:
+                        inputs, labels = batch
+                        pos = None
                     inputs, labels = inputs.to(self.device), labels.to(self.device)
                     optimizer.zero_grad()
-                    # _model_forward handles both 4D and 5D (temporal) inputs
-                    outputs = self._model_forward(inputs)
+                    # _model_forward handles 4D/5D inputs and optional pos map
+                    outputs = self._model_forward(inputs, pos)
                     loss = self.criterion(outputs, labels)
                     # Regularization
                     if self.rgl:
@@ -347,10 +437,16 @@ class NeuralNetwork(BaseNeuralNetwork):
         self.model.eval()
         val_loss, val_correct = 0.0, 0
         with torch.no_grad():
-            for inputs, labels in test_loader:
+            for batch in test_loader:
+                if len(batch) == 3:
+                    inputs, labels, pos = batch
+                    pos = pos.to(self.device)
+                else:
+                    inputs, labels = batch
+                    pos = None
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
-                # _model_forward handles both 4D and 5D (temporal) inputs
-                outputs = self._model_forward(inputs)
+                # _model_forward handles 4D/5D inputs and optional pos map
+                outputs = self._model_forward(inputs, pos)
                 loss = self.criterion(outputs, labels)
                 val_loss += loss.item()
                 val_correct += (outputs.argmax(1) == labels).sum().item()

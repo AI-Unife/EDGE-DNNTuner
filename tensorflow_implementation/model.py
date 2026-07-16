@@ -62,7 +62,7 @@ class TFModel(TunerModel):
         self.da = params.get("data_augmentation", False)
 
         print(f"\n\n{self.cfg.dataset.lower()}\n\n")
-        batch = True if "tiny" in self.cfg.dataset.lower() or "beans" in self.cfg.dataset.lower() else False  # self.reg if self.reg else None
+        batch = True if "tiny" in self.cfg.dataset.lower() or "cim" in self.cfg.dataset.lower() else False  # self.reg if self.reg else None
         self.model = None
         # 2) Build a new CNN
 
@@ -123,10 +123,10 @@ class TFModel(TunerModel):
                 x = Activation(params["activation"])(x)
                 x = BatchNormalization()(x) if batch else x
             
-            x = Dropout(params["dr_f"])(x)
+            # x = Dropout(params["dr_f"])(x)
             x = MaxPooling2D(pool_size=(2, 2))(x)
 
-        x = GlobalAveragePooling2D()(x) if batch else Flatten()(x)
+        x = GlobalAveragePooling2D()(x) # if batch else Flatten()(x)
         
         # If ROI dataset, concatenate flattened pos with x
         pos_input = None

@@ -275,12 +275,12 @@ class TunerDataset:
         print(self.X_train.shape[0], 'train samples')
         print(self.X_test.shape[0], 'test samples')
     
-    def load_roi_gesture(self):
+    def load_roi_gesture(self, frame_size: int = 32):
         """Load DVSGesture dataset using the specialized gesture_dataset module, with ROI."""
         from components.gesture_dataset import gesture_data
         
         self.n_classes = 11
-        X_train_raw, self.Y_train, X_test_raw, self.Y_test = gesture_data(num_classes=11, ROI=True)
+        X_train_raw, self.Y_train, X_test_raw, self.Y_test = gesture_data(num_classes=11, ROI=True, frame_size=frame_size)
         if isinstance(X_test_raw[0], dict):
             self.X_train = np.array([item["data"] for item in X_train_raw]).astype("float32")
             self.pos_train = np.array([item["pos"] for item in X_train_raw])

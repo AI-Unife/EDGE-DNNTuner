@@ -27,7 +27,51 @@ from pathlib import Path
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _load_dataset(dataset_name: str):
+def _detect_roi_frame_size(experiment: Path, saved_model=None) -> int:
+    """
+    Detect the spatial frame size (typically 16 or 32) used when preprocessing
+    an ROI gesture dataset.
+
+    Detection order:
+      1. From the loaded Keras model's input shape — the most reliable source:
+         the model was trained with frames of exactly that size.
+      2. From any SLURM .out file in the experiment or cwd: searches for the
+         first occurrence of "Building model with input_shape=(H," and reads H.
+      3. Default: 32.
+    """
+    # 1. From loaded Keras model: input_shape is (None, H, W, C) → H = frame_size
+    if saved_model is not None:
+        try:
+            shape = saved_model.input_shape
+            # Multi-input models (ROI) expose a list of shapes; take the first branch
+            if isinstance(shape, list):
+                shape = shape[0]
+            frame_size = int(shape[1])
+            print(f"[ROI frame size] Detected={frame_size} from saved model input shape {shape}.")
+            return frame_size
+        except Exception:
+            pass
+
+    # 2. From .out file — all iterations share the same frame_size, so the first
+    #    match in the file is sufficient.
+    pattern = re.compile(r"Building model with input_shape=\((\d+)")
+    for d in [experiment, Path(".")]:
+        for out_file in sorted(d.glob("*.out")):
+            try:
+                text = out_file.read_text(errors="replace")
+            except OSError:
+                continue
+            match = pattern.search(text)
+            if match:
+                frame_size = int(match.group(1))
+                print(f"[ROI frame size] Detected={frame_size} from '{out_file.name}'.")
+                return frame_size
+
+    print("[ROI frame size] Could not detect — using default=32.")
+    return 32
+
+
+def _load_dataset(dataset_name: str, frame_size: int = 32):
     """Instantiate and load the correct TunerDataset for the given dataset name."""
     from components.dataset import TunerDataset
 
@@ -45,7 +89,7 @@ def _load_dataset(dataset_name: str):
     elif name == "gesture":
         ds.load_gesture()
     elif "roigesture" in name:
-        ds.load_roi_gesture()
+        ds.load_roi_gesture(frame_size=frame_size)
     elif name == "tinyimagenet":
         ds.load_tiny_imagenet()
     elif name == "cca":
@@ -297,8 +341,17 @@ def main():
         print("[1] Model loaded.")
 
     # ── 2. Load the dataset ───────────────────────────────────────────────────
-    print(f"\n[2] Loading dataset '{cfg.dataset}'...")
-    dataset = _load_dataset(cfg.dataset)
+    # For ROI gesture datasets, the spatial frame size (16 or 32) must be known
+    # before loading so the correct preprocessed cache is selected.
+    # Detect it from the loaded model (most reliable) or from the .out log file.
+    roi_frame_size = 32
+    if "roigesture" in cfg.dataset.lower():
+        roi_frame_size = _detect_roi_frame_size(experiment, saved_model=saved_model)
+
+    print(f"\n[2] Loading dataset '{cfg.dataset}'" +
+          (f" (frame_size={roi_frame_size})" if "roigesture" in cfg.dataset.lower() else "") +
+          "...")
+    dataset = _load_dataset(cfg.dataset, frame_size=roi_frame_size)
     # Ensure float32 dtype for both frameworks (avoids silent type mismatches)
     dataset.data_as_float32()
     print(
