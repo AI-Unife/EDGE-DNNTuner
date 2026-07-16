@@ -452,6 +452,7 @@ def main():
 
     # ── 3. Evaluate the pre-trained model ────────────────────────────────────
     if saved_model is not None:
+        saved_model.summary()
         print("\n[3] Evaluating pre-trained model (best-model.keras)...")
         saved_loss, saved_acc = _eval_keras_model(saved_model, dataset, cfg)
     else:
