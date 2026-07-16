@@ -204,7 +204,8 @@ def _parse_best_from_out(
     return None  # no .out file found / parsable
 
 
-
+def _find_best_iteration(algo_logs: Path) -> int:
+    """Fallback: return the 0-based index of the best iteration from log files."""
     score_path = algo_logs / "score_report.txt"
     acc_path = algo_logs / "acc_report.txt"
 
