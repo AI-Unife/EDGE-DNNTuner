@@ -107,14 +107,104 @@ def _load_dataset(dataset_name: str, frame_size: int = 32):
     return ds
 
 
-def _find_best_iteration(algo_logs: Path) -> int:
+def _parse_best_from_out(
+    experiment: Path,
+) -> "tuple[dict, int, int] | None":
     """
-    Return the 0-based index of the best tuning iteration.
+    Parse a SLURM .out log and extract the best iteration's hyperparameters,
+    layer_x_block, and 0-based iteration index — all from a single source of truth.
 
-    Priority:
-      1. score_report.txt  – lower is better  (minimise combined score)
-      2. acc_report.txt    – higher is better (maximise validation accuracy)
+    Each iteration block (delimited by ``--- ITERATION N ---`` banners) contains:
+        Chosen point: {<params dict>}
+        Building model with input_shape=(...), ..., layer_x_block=N
+        ...
+        ACCURACY: <val>
+        SCORE: <val>
+
+    Ranking:
+      - SCORE  is available → minimise (lower combined score is better)
+      - SCORE  not available → maximise ACCURACY
+
+    Search order: experiment directory first, then current working directory.
+
+    Returns:
+        (params_dict, layer_x_block, iteration_index_0based)
+        or None if no parsable .out file is found.
     """
+    for d in [experiment, Path(".")]:
+        for out_file in sorted(d.glob("*.out")):
+            try:
+                raw = out_file.read_text(errors="replace")
+            except OSError:
+                continue
+
+            # Strip ANSI escape codes so regexes work cleanly
+            text = re.sub(r"\x1b\[[0-9;]*m", "", raw)
+
+            # Split into per-iteration blocks; blocks[0] = header
+            blocks = re.split(r"---\s*ITERATION\s+\d+\s*---", text)
+            if len(blocks) < 2:
+                continue  # no iterations found in this file
+
+            iterations = []
+            for idx, block in enumerate(blocks[1:]):  # idx = 0-based iteration index
+                # --- hyperparameters ---
+                m = re.search(r"Chosen point:\s*(\{.+?\})", block, re.DOTALL)
+                if not m:
+                    continue
+                try:
+                    params = ast.literal_eval(m.group(1))
+                except Exception:
+                    continue
+
+                # --- architecture ---
+                lxb_m = re.search(r"layer_x_block=(\d+)", block)
+                lxb = int(lxb_m.group(1)) if lxb_m else 2
+
+                # --- scores ---
+                score_m = re.search(r"SCORE:\s*([-\d.eE+]+)", block)
+                acc_m   = re.search(r"ACCURACY:\s*([-\d.eE+]+)", block)
+                score = float(score_m.group(1)) if score_m else None
+                acc   = float(acc_m.group(1))   if acc_m   else None
+
+                iterations.append(
+                    {"index": idx, "params": params, "lxb": lxb,
+                     "score": score, "acc": acc}
+                )
+
+            if not iterations:
+                continue
+
+            # Rank: prefer SCORE (lower = better), fall back to ACCURACY (higher = better)
+            has_score = any(it["score"] is not None for it in iterations)
+            valid = [it for it in iterations
+                     if (it["score"] if has_score else it["acc"]) is not None]
+            if not valid:
+                continue
+
+            if has_score:
+                best = min(valid, key=lambda it: it["score"])
+                print(
+                    f"[Selection] '{out_file.name}' — "
+                    f"best iteration (0-based): {best['index']} "
+                    f"(score={best['score']:.4f})"
+                )
+            else:
+                best = max(valid, key=lambda it: it["acc"])
+                print(
+                    f"[Selection] '{out_file.name}' — "
+                    f"best iteration (0-based): {best['index']} "
+                    f"(acc={best['acc']:.4f})"
+                )
+
+            print(f"[Hyperparams]    {best['params']}")
+            print(f"[layer_x_block]  {best['lxb']}")
+            return best["params"], best["lxb"], best["index"]
+
+    return None  # no .out file found / parsable
+
+
+
     score_path = algo_logs / "score_report.txt"
     acc_path = algo_logs / "acc_report.txt"
 
@@ -367,14 +457,19 @@ def main():
         print("\n[3] No pre-trained model to evaluate.")
 
     # ── 4. Extract the best iteration point ──────────────────────────────────
-    # algorithm_logs/ contains one line per iteration for scores, accuracies
-    # and hyperparameters; these are written by controller.log() and
-    # ObjectiveWrapper.objective() during the tuning run.
-    algo_logs = experiment / "algorithm_logs"
-    print(f"\n[4] Finding best iteration in {algo_logs} ...")
-    best_idx = _find_best_iteration(algo_logs)
-    best_params = _load_best_params(algo_logs, best_idx)
-    layer_x_block = _find_layer_x_block(experiment, best_idx)
+    # Primary source: SLURM .out file — single source of truth that contains
+    # hyperparameters, layer_x_block, and scores all in one place.
+    # Fallback: algorithm_logs/ text files (hyper-neural.txt + score/acc_report.txt)
+    print(f"\n[4] Finding best iteration ...")
+    out_result = _parse_best_from_out(experiment)
+    if out_result is not None:
+        best_params, layer_x_block, best_idx = out_result
+    else:
+        print("[4] No .out file found — falling back to algorithm_logs/")
+        algo_logs = experiment / "algorithm_logs"
+        best_idx = _find_best_iteration(algo_logs)
+        best_params = _load_best_params(algo_logs, best_idx)
+        layer_x_block = _find_layer_x_block(experiment, best_idx)
     print(f"[4] layer_x_block={layer_x_block}")
 
     # ── 5–6. Rebuild + retrain (only when --retrain is passed) ───────────────
