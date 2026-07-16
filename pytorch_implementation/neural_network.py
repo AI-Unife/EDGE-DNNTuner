@@ -183,14 +183,17 @@ class NeuralNetwork(BaseNeuralNetwork):
         use_bn = "tiny" in dataset_name or "cim" in dataset_name
 
         # Derive pos_input_shape from the dataset for ROI models.
-        # Must match TF's logic: pos_train.shape[2:] (dropping batch and time dims)
-        # so the model sees the per-frame pos shape, e.g. (4, 16, 16).
+        # Must match TF's logic: for temporal data (5D images) TF uses shape[2:]
+        # to get the per-frame pos shape; for single-frame data (4D) it uses shape[1:].
         pos_input_shape = None
         if self.is_roi and self.train_pos is not None:
-            if self.train_pos.ndim >= 3:
-                # Temporal: (N, T, ...) → per-frame = shape[2:]
+            if self.train_images.ndim == 5:
+                # Temporal dataset: train_images (N, T, C, H, W), train_pos (N, T, ...)
+                # → per-frame pos shape = shape[2:]  (drop batch and time dims)
                 pos_input_shape = tuple(self.train_pos.shape[2:])
             else:
+                # Single-frame dataset: train_images (N, C, H, W), train_pos (N, ...)
+                # → pos shape = shape[1:]  (drop batch dim only)
                 pos_input_shape = tuple(self.train_pos.shape[1:])
 
         self.model = TorchModel(
