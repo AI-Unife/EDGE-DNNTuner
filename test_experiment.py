@@ -417,7 +417,26 @@ def run_single_experiment(experiment: Path, args) -> dict:
     print(f"Retrain     : {args.retrain}")
     print(f"{'='*60}\n")
 
-    # ── 1. Load the saved Keras model ────────────────────────────────────────
+
+
+    # ── 1. Load the dataset ───────────────────────────────────────────────────
+    # For ROI gesture datasets, the spatial frame size (16 or 32) must be known
+    # before loading so the correct preprocessed cache is selected.
+    # Detect it from the loaded model (most reliable) or from the .out log file.
+    roi_frame_size = 32
+
+    print(f"\n[1] Loading dataset '{cfg.dataset}'" +
+          (f" (frame_size={roi_frame_size})" if "roigesture" in cfg.dataset.lower() else "") +
+          "...")
+    dataset = _load_dataset(cfg.dataset, frame_size=roi_frame_size)
+    # Ensure float32 dtype for both frameworks (avoids silent type mismatches)
+    dataset.data_as_float32()
+    print(
+        f"[1] Dataset loaded: "
+        f"{dataset.X_train.shape[0]} train / {dataset.X_test.shape[0]} test samples."
+    )
+    
+    # ── 2. Load the saved Keras model ────────────────────────────────────────
     # load_keras_model (test_utils) registers LayerWiseLR as a custom object so
     # that models saved with that optimizer can be deserialized correctly.
     keras_model_path = experiment / "Model" / "best-model.keras"
@@ -428,56 +447,38 @@ def run_single_experiment(experiment: Path, args) -> dict:
         )
         saved_model = None
     else:
-        print(f"\n[1] Loading model from: {keras_model_path}")
+        print(f"\n[2] Loading model from: {keras_model_path}")
         from test_utils import load_keras_model
         saved_model = load_keras_model(str(keras_model_path))
-        print("[1] Model loaded.")
-
-    # ── 2. Load the dataset ───────────────────────────────────────────────────
-    # For ROI gesture datasets, the spatial frame size (16 or 32) must be known
-    # before loading so the correct preprocessed cache is selected.
-    # Detect it from the loaded model (most reliable) or from the .out log file.
-    # roi_frame_size = 32
-    # if "roigesture" in cfg.dataset.lower():
-    #     roi_frame_size = _detect_roi_frame_size(experiment, saved_model=saved_model)
-
-    # print(f"\n[2] Loading dataset '{cfg.dataset}'" +
-    #       (f" (frame_size={roi_frame_size})" if "roigesture" in cfg.dataset.lower() else "") +
-    #       "...")
-    # dataset = _load_dataset(cfg.dataset, frame_size=roi_frame_size)
-    # # Ensure float32 dtype for both frameworks (avoids silent type mismatches)
-    # dataset.data_as_float32()
-    # print(
-    #     f"[2] Dataset loaded: "
-    #     f"{dataset.X_train.shape[0]} train / {dataset.X_test.shape[0]} test samples."
-    # )
-
-    # ── 3. Evaluate the pre-trained model ────────────────────────────────────
-    saved_loss = saved_acc = None
-    if saved_model is not None:
-        # saved_model.summary()
-        print("\n[3] Evaluating pre-trained model (best-model.keras)...")
-        # saved_loss, saved_acc = _eval_keras_model(saved_model, dataset, cfg)
-    else:
-        print("\n[3] No pre-trained model to evaluate.")
-
-    # ── 4. Extract the best iteration point ──────────────────────────────────
+        print("[2] Model loaded.")
+        
+        
+    # ── 3. Extract the best iteration point ──────────────────────────────────
     # Primary source: SLURM .out file — single source of truth that contains
     # hyperparameters, layer_x_block, and scores all in one place.
     # Fallback: algorithm_logs/ text files (hyper-neural.txt + score/acc_report.txt)
-    print(f"\n[4] Finding best iteration ...")
+    print(f"\n[3] Finding best iteration ...")
     out_result = _parse_best_from_out(experiment)
     if out_result is not None:
         best_params, layer_x_block, best_idx, valid = out_result
     else:
-        print("[4] No .out file found — falling back to algorithm_logs/")
+        print("[3] No .out file found — falling back to algorithm_logs/")
         algo_logs = experiment / "algorithm_logs"
         best_idx = _find_best_iteration(algo_logs)
         best_params = _load_best_params(algo_logs, best_idx)
         layer_x_block = _find_layer_x_block(experiment, best_idx)
-    print(f"[4] layer_x_block={layer_x_block}")
+    print(f"[3] layer_x_block={layer_x_block}")
     saved_loss = valid.get("score", 0.0)
     saved_acc = valid.get("acc", 0.0)
+
+    # ── 4. Evaluate the pre-trained model ────────────────────────────────────
+    if saved_model is not None and best_params['activation'] == 'relu':
+        saved_model.summary()
+        print("\n[4] Evaluating pre-trained model (best-model.keras)...")
+        saved_loss, saved_acc = _eval_keras_model(saved_model, dataset, cfg)
+    else:
+        # bypass loading the model becouse the best one does not have the relu activation
+        print("\n[4] No pre-trained model to evaluate. Model was not built with relu activation.")
 
     # ── 5–6. Rebuild + retrain (only when --retrain is passed) ───────────────
 
