@@ -3,22 +3,46 @@ test_experiment.py  –  Evaluate a pre-trained experiment and optionally retrai
 
 Usage:
     # Single experiment (must contain config.yaml directly)
-    python test_experiment.py --experiment <path/to/experiment_dir> [options]
+    python test_experiment.py --experiment <path/to/experiment_dir> [--selection-mode MODE]
 
-    # Batch mode: <path> is a parent folder containing one or more experiment
-    # subfolders. Any subfolder (at any depth) that contains at least one
-    # SLURM ".out" file is treated as an experiment directory and processed
-    # in turn. A single per-experiment failure does not stop the batch.
-    python test_experiment.py --experiment <path/to/parent_dir> [options]
+    # Batch mode (REPORT ONLY): <path> is a parent folder containing one or
+    # more experiment subfolders. Any subfolder (at any depth) that contains
+    # at least one SLURM ".out" file is treated as an experiment directory.
+    # In this mode the script NEVER loads a dataset, NEVER loads/evaluates the
+    # saved Keras model, and NEVER retrains anything — for each experiment it
+    # only looks up and prints the best iteration overall and the best
+    # iteration among those natively trained with activation='relu'.
+    # --selection-mode/--epochs/--backend are ignored in this mode.
+    python test_experiment.py --experiment <path/to/parent_dir>
+
+Selection / activation policy (--selection-mode), chosen once per run (asked
+interactively if not passed on the command line):
+
+  native_relu         Find the best iteration AMONG THOSE that already used
+                       activation='relu' natively (i.e. it was the value
+                       chosen by the hyper-parameter search, not forced), and
+                       retrain that architecture from scratch.
+
+  force_relu_retrain   Find the best iteration overall (regardless of its
+                       original activation), force its activation to 'relu',
+                       and retrain that architecture from scratch.
+
+  force_relu_infer     Find the best iteration overall (regardless of its
+                       original activation), load the corresponding saved
+                       Keras model (Model/best-model.keras), force its
+                       layers' activation to 'relu' at inference time, and
+                       only evaluate it (no retraining).
 
 Steps (applied to each experiment directory):
-  1) Load  Model/best-model.keras
-  2) Load  the dataset described in the experiment's config.yaml
-  3) Test  the saved model  (accuracy and loss)
-  4) Find  the best iteration from algorithm_logs/hyper-neural.txt
-           using score_report.txt as the index (acc_report.txt as fallback)
-  5) Rebuild the same architecture with the configured backend (tf or torch)
-  6) Retrain and test  (only when --retrain is passed)
+  1) Load  the dataset described in the experiment's config.yaml
+  2) Find  the best iteration (subject to the chosen selection-mode policy)
+           from the SLURM .out log, or — as a fallback — from
+           algorithm_logs/hyper-neural.txt using score_report.txt as the
+           index (acc_report.txt as fallback)
+  3) Load  Model/best-model.keras                (modes: force_relu_retrain, force_relu_infer)
+  4) Test  the saved model  (accuracy and loss)   (modes: force_relu_retrain, force_relu_infer)
+  5) Rebuild the same architecture with the configured backend (tf or torch)  (modes: native_relu, force_relu_retrain)
+  6) Retrain and test                                                         (modes: native_relu, force_relu_retrain)
 """
 from __future__ import annotations
 
@@ -28,6 +52,35 @@ import os
 import re
 import sys
 from pathlib import Path
+
+
+SELECTION_MODES = ("native_relu", "force_relu_retrain", "force_relu_infer")
+
+SELECTION_MODE_PROMPTS = {
+    "1": ("native_relu",
+          "Trova il miglior modello che ha GIA' 'relu' come attivazione fin "
+          "dall'origine, e riaddestra quello."),
+    "2": ("force_relu_retrain",
+          "Prendi il modello migliore in assoluto, imposta l'attivazione a "
+          "'relu' e riaddestralo da zero."),
+    "3": ("force_relu_infer",
+          "Prendi il modello migliore in assoluto, imposta l'attivazione a "
+          "'relu' e fai SOLO inferenza (nessun riaddestramento)."),
+}
+
+
+def _prompt_selection_mode() -> str:
+    """Ask the user, once per run, which selection/activation policy to use."""
+    print("\nSeleziona la modalita' di scelta del modello / attivazione:")
+    for key, (_, desc) in SELECTION_MODE_PROMPTS.items():
+        print(f"  {key}) {desc}")
+    while True:
+        choice = input("Scelta [1/2/3]: ").strip()
+        if choice in SELECTION_MODE_PROMPTS:
+            mode = SELECTION_MODE_PROMPTS[choice][0]
+            print(f"[Selection mode] '{mode}' selezionato.\n")
+            return mode
+        print("Scelta non valida, riprova.")
 
 
 # ---------------------------------------------------------------------------
@@ -46,11 +99,9 @@ def _detect_roi_frame_size(experiment: Path, saved_model=None) -> int:
          first occurrence of "Building model with input_shape=(H," and reads H.
       3. Default: 32.
     """
-    # 1. From loaded Keras model: input_shape is (None, H, W, C) → H = frame_size
     if saved_model is not None:
         try:
             shape = saved_model.input_shape
-            # Multi-input models (ROI) expose a list of shapes; take the first branch
             if isinstance(shape, list):
                 shape = shape[0]
             frame_size = int(shape[1])
@@ -59,8 +110,6 @@ def _detect_roi_frame_size(experiment: Path, saved_model=None) -> int:
         except Exception:
             pass
 
-    # 2. From .out file — all iterations share the same frame_size  , so the first
-    #    match in the file is sufficient.
     pattern = re.compile(r"Building model with input_shape=\((\d+)")
     for d in [experiment, Path(".")]:
         for out_file in sorted(d.glob("*.out")):
@@ -116,7 +165,8 @@ def _load_dataset(dataset_name: str, frame_size: int = 32):
 
 def _parse_best_from_out(
     experiment: Path,
-) -> "tuple[dict, int, int] | None":
+    require_relu: bool = False,
+) -> "tuple[dict, int, int, float, float] | None":
     """
     Parse a SLURM .out log and extract the best iteration's hyperparameters,
     layer_x_block, and 0-based iteration index — all from a single source of truth.
@@ -132,11 +182,15 @@ def _parse_best_from_out(
       - SCORE  is available → minimise (lower combined score is better)
       - SCORE  not available → maximise ACCURACY
 
+    If ``require_relu`` is True, only iterations whose original hyperparameters
+    already used activation='relu' are considered candidates (this implements
+    the 'native_relu' selection mode).
+
     Search order: experiment directory first, then current working directory.
 
     Returns:
-        (params_dict, layer_x_block, iteration_index_0based)
-        or None if no parsable .out file is found.
+        (params_dict, layer_x_block, iteration_index_0based, best_acc, best_score)
+        or None if no parsable / matching .out file is found.
     """
     for d in [experiment, Path(".")]:
         for out_file in sorted(d.glob("*.out")):
@@ -161,7 +215,6 @@ def _parse_best_from_out(
                     continue
                 try:
                     params = ast.literal_eval(m.group(1))
-                    params.update({"skip_connection": False, "activation": "relu"})  # ensure skip=False
                 except Exception:
                     continue
 
@@ -185,8 +238,11 @@ def _parse_best_from_out(
 
             # Rank: prefer SCORE (lower = better), fall back to ACCURACY (higher = better)
             has_score = any(it["score"] is not None for it in iterations)
-            valid = [it for it in iterations
-                     if it['params']['activation'] == 'relu' and ( it["score"] if has_score else it["acc"]) is not None]
+            valid = [
+                it for it in iterations
+                if (not require_relu or it["params"].get("activation") == "relu")
+                and (it["score"] if has_score else it["acc"]) is not None
+            ]
             if not valid:
                 continue
 
@@ -207,70 +263,184 @@ def _parse_best_from_out(
 
             print(f"[Hyperparams]    {best['params']}")
             print(f"[layer_x_block]  {best['lxb']}")
-            return best["params"], best["lxb"], best["index"], valid[best["index"]]
+            return best["params"], best["lxb"], best["index"], best["acc"], best["score"]
 
-    return None  # no .out file found / parsable
+    return None  # no .out file found / parsable / matching
 
 
-def _find_best_iteration(algo_logs: Path) -> int:
-    """Fallback: return the 0-based index of the best iteration from log files."""
+def _find_best_iteration_fallback(
+    algo_logs: Path, require_relu: bool = False
+) -> "tuple[int, dict, str, float]":
+    """
+    Fallback selection (used when no .out file is available): rank iterations
+    using score_report.txt (preferred, lower = better) or acc_report.txt
+    (higher = better), reading the corresponding hyperparameters from
+    hyper-neural.txt (same line index).
+
+    If ``require_relu`` is True, only iterations whose hyperparameters already
+    used activation='relu' are considered (the 'native_relu' selection mode).
+
+    Returns:
+        (best_idx, params_dict, metric_name, metric_value)
+        where metric_name is "score" or "acc".
+    """
+    hyper_path = algo_logs / "hyper-neural.txt"
+    if not hyper_path.exists():
+        raise FileNotFoundError(f"hyper-neural.txt not found in {algo_logs}")
+
+    lines = [l.strip() for l in hyper_path.read_text().splitlines() if l.strip()]
+    all_params: "list[dict | None]" = []
+    for l in lines:
+        try:
+            all_params.append(ast.literal_eval(l))
+        except Exception:
+            all_params.append(None)
+
     score_path = algo_logs / "score_report.txt"
     acc_path = algo_logs / "acc_report.txt"
 
     if score_path.exists():
-        # Parse all non-empty, non-"None" lines as floats
-        values = [
-            float(l.strip())
-            for l in score_path.read_text().splitlines()
-            if l.strip() and l.strip().lower() != "none"
-        ]
-        if not values:
-            raise ValueError(f"score_report.txt is empty in {algo_logs}")
-        # The best iteration has the lowest combined score
-        best_idx = min(range(len(values)), key=lambda i: values[i])
-        print(
-            f"[Selection] score_report.txt — best iteration: {best_idx} "
-            f"(score={values[best_idx]:.4f})"
-        )
+        raw_lines = score_path.read_text().splitlines()
+        use_score = True
+        source_name = "score_report.txt"
     elif acc_path.exists():
-        # Fallback: use validation accuracy (higher is better)
-        values = [
-            float(l.strip())
-            for l in acc_path.read_text().splitlines()
-            if l.strip() and l.strip().lower() != "none"
-        ]
-        if not values:
-            raise ValueError(f"acc_report.txt is empty in {algo_logs}")
-        best_idx = max(range(len(values)), key=lambda i: values[i])
-        print(
-            f"[Selection] acc_report.txt — best iteration: {best_idx} "
-            f"(acc={values[best_idx]:.4f})"
-        )
+        raw_lines = acc_path.read_text().splitlines()
+        use_score = False
+        source_name = "acc_report.txt"
     else:
         raise FileNotFoundError(
             f"Neither score_report.txt nor acc_report.txt found in {algo_logs}"
         )
 
-    return best_idx
+    values: "list[float | None]" = []
+    for l in raw_lines:
+        l = l.strip()
+        if not l or l.lower() == "none":
+            values.append(None)
+        else:
+            values.append(float(l))
 
+    candidates = []
+    for i, v in enumerate(values):
+        if v is None:
+            continue
+        if i >= len(all_params) or all_params[i] is None:
+            continue
+        if require_relu and all_params[i].get("activation") != "relu":
+            continue
+        candidates.append(i)
 
-def _load_best_params(algo_logs: Path, best_idx: int) -> dict:
-    """Read line best_idx from hyper-neural.txt and parse it into a dict."""
-    hyper_path = algo_logs / "hyper-neural.txt"
-    if not hyper_path.exists():
-        raise FileNotFoundError(f"hyper-neural.txt not found in {algo_logs}")
+    if not candidates:
+        scope = " con activation='relu'" if require_relu else ""
+        raise ValueError(f"Nessuna iterazione valida{scope} trovata in {algo_logs}")
 
-    # Each line is a Python dict literal written by ObjectiveWrapper.objective()
-    lines = [l.strip() for l in hyper_path.read_text().splitlines() if l.strip()]
-    if best_idx >= len(lines):
-        raise IndexError(
-            f"best_idx={best_idx} out of range: hyper-neural.txt has {len(lines)} lines."
-        )
-    # Safe parse: ast.literal_eval handles plain dict literals without executing code
-    params = ast.literal_eval(lines[best_idx])
-    params.update({"skip_connection": False, "activation": "relu"})  # ensure skip=False
+    if use_score:
+        best_idx = min(candidates, key=lambda i: values[i])
+        metric_name = "score"
+        print(f"[Selection] {source_name} — best iteration: {best_idx} (score={values[best_idx]:.4f})")
+    else:
+        best_idx = max(candidates, key=lambda i: values[i])
+        metric_name = "acc"
+        print(f"[Selection] {source_name} — best iteration: {best_idx} (acc={values[best_idx]:.4f})")
+
+    params = dict(all_params[best_idx])
     print(f"[Hyperparams] {params}")
-    return params
+    return best_idx, params, metric_name, values[best_idx]
+
+
+def _find_best_overall_and_relu(experiment: Path) -> dict:
+    """
+    For a single experiment directory, find BOTH:
+      - the best iteration overall (any activation)
+      - the best iteration among those natively trained with activation='relu'
+
+    without touching the dataset or any saved Keras model — this is used by
+    batch mode, which only reports these two results and never loads data,
+    loads a saved model, evaluates it, or retrains anything.
+
+    Returns a dict:
+        {
+          "overall": {"idx", "params", "layer_x_block", "metric_name", "metric_value"} | None,
+          "overall_error": str            # present only if "overall" is None
+          "relu":    {"idx", "params", "layer_x_block", "metric_name", "metric_value"} | None,
+          "relu_error": str                # present only if "relu" is None
+        }
+    """
+    result: dict = {"overall": None, "relu": None}
+
+    out_overall = _parse_best_from_out(experiment, require_relu=False)
+    out_relu = _parse_best_from_out(experiment, require_relu=True)
+
+    def _pack_from_out(out_result):
+        params, lxb, idx, acc, score = out_result
+        metric_name, metric_value = ("score", score) if score is not None else ("acc", acc)
+        return {"idx": idx, "params": params, "layer_x_block": lxb,
+                "metric_name": metric_name, "metric_value": metric_value}
+
+    if out_overall is not None:
+        result["overall"] = _pack_from_out(out_overall)
+    if out_relu is not None:
+        result["relu"] = _pack_from_out(out_relu)
+
+    if out_overall is None or out_relu is None:
+        algo_logs = experiment / "algorithm_logs"
+        if out_overall is None:
+            try:
+                idx, params, metric_name, metric_value = _find_best_iteration_fallback(
+                    algo_logs, require_relu=False
+                )
+                lxb = _find_layer_x_block(experiment, idx)
+                result["overall"] = {"idx": idx, "params": params, "layer_x_block": lxb,
+                                      "metric_name": metric_name, "metric_value": metric_value}
+            except Exception as exc:
+                result["overall_error"] = str(exc)
+        if out_relu is None:
+            try:
+                idx, params, metric_name, metric_value = _find_best_iteration_fallback(
+                    algo_logs, require_relu=True
+                )
+                lxb = _find_layer_x_block(experiment, idx)
+                result["relu"] = {"idx": idx, "params": params, "layer_x_block": lxb,
+                                   "metric_name": metric_name, "metric_value": metric_value}
+            except Exception as exc:
+                result["relu_error"] = str(exc)
+
+    return result
+
+
+def _print_candidate(label: str, cand: "dict | None", error: "str | None" = None) -> None:
+    """Pretty-print a single best-iteration candidate (or the reason it's missing)."""
+    if cand is None:
+        msg = error or "nessuna iterazione trovata"
+        print(f"  {label:<28}: NON TROVATO — {msg}")
+        return
+    print(
+        f"  {label:<28}: iterazione={cand['idx']}  layer_x_block={cand['layer_x_block']}  "
+        f"{cand['metric_name']}={cand['metric_value']:.4f}"
+    )
+    print(f"    hyperparams: {cand['params']}")
+
+
+def _print_batch_best_group(results: "list[dict]", key: str, group_label: str) -> None:
+    """
+    Across all experiments in a batch, print which one obtained the best value
+    for ``key`` ("overall" or "relu"), separately for score-ranked and
+    accuracy-ranked experiments (the two metrics aren't comparable directly).
+    """
+    cands = [(r["experiment"], r[key]) for r in results if r.get(key) is not None]
+    score_cands = [(e, c) for e, c in cands if c["metric_name"] == "score"]
+    acc_cands = [(e, c) for e, c in cands if c["metric_name"] == "acc"]
+
+    if not score_cands and not acc_cands:
+        print(f"  {group_label}: nessun esperimento ha prodotto un risultato utilizzabile.")
+        return
+
+    if score_cands:
+        best_e, best_c = min(score_cands, key=lambda x: x[1]["metric_value"])
+        print(f"  {group_label} (score piu' basso)   : {best_e}  score={best_c['metric_value']:.4f}")
+    if acc_cands:
+        best_e, best_c = max(acc_cands, key=lambda x: x[1]["metric_value"])
+        print(f"  {group_label} (accuracy piu' alta) : {best_e}  acc={best_c['metric_value']:.4f}")
 
 
 def _find_layer_x_block(experiment: Path, best_idx: int) -> int:
@@ -278,13 +448,9 @@ def _find_layer_x_block(experiment: Path, best_idx: int) -> int:
     Extract the layer_x_block value used at iteration best_idx from the SLURM
     .out file produced during the tuning run.
 
-    The log line has the form:
-        Building model with input_shape=(...), ..., layer_x_block=N
-
     Search order: experiment directory first, then the current working directory.
     Falls back to 2 if no matching .out file is found.
     """
-    # Look inside the experiment dir first, then the cwd (where sbatch saves .out)
     search_dirs = [experiment, Path(".")]
     for d in search_dirs:
         out_files = sorted(d.glob("*.out"))
@@ -293,7 +459,6 @@ def _find_layer_x_block(experiment: Path, best_idx: int) -> int:
                 text = out_file.read_text(errors="replace")
             except OSError:
                 continue
-            # Split the log by iteration banners to isolate each iteration block
             blocks = re.split(r"---\s*ITERATION\s+\d+\s*---", text)
             if best_idx + 1 < len(blocks):
                 match = re.search(r"layer_x_block=(\d+)", blocks[best_idx + 1])
@@ -307,6 +472,25 @@ def _find_layer_x_block(experiment: Path, best_idx: int) -> int:
 
     print("[layer_x_block] Not found in any .out file — using default=2")
     return 2
+
+
+def _force_relu_activations(model) -> None:
+    """
+    Monkey-patch every layer's stored activation function to ReLU, in place.
+
+    This is used only by the 'force_relu_infer' selection mode: it swaps the
+    activation of an ALREADY TRAINED model at inference time (weights are not
+    retrained/recompiled), purely to measure how the saved checkpoint behaves
+    if its activation had been 'relu'.
+    """
+    import tensorflow as tf
+
+    changed = 0
+    for layer in model.layers:
+        if hasattr(layer, "activation") and layer.activation is not None:
+            layer.activation = tf.keras.activations.get("relu")
+            changed += 1
+    print(f"[Force ReLU] Patched activation on {changed} layer(s) of the saved model.")
 
 
 def _eval_keras_model(model, dataset, cfg) -> tuple[float, float]:
@@ -325,30 +509,24 @@ def _eval_keras_model(model, dataset, cfg) -> tuple[float, float]:
 
     n_classes = dataset.n_classes
 
-    # One-hot encode integer labels to match the training target format
     y_test = dataset.Y_test
     if y_test.ndim == 1:
         y_test = tf.keras.utils.to_categorical(y_test, n_classes)
 
     x_test = dataset.X_test.astype("float32")
 
-    # Compile with the same loss used during training; no optimizer needed for eval
     model.compile(loss="categorical_crossentropy", optimizer="adam", metrics=["accuracy"])
 
-    # Detect dataset variant
     is_roi = hasattr(dataset, "pos_test") and dataset.pos_test is not None
     is_gesture = (cfg.mode in ("fwdPass", "hybrid")) and ("gesture" in cfg.dataset)
 
     if is_gesture:
-        # Temporal evaluation: iterate over time frames and vote by majority
         from test_utils import eval_model as gesture_eval
         x_input = [x_test, dataset.pos_test] if is_roi else x_test
         score = gesture_eval(model, x_input, y_test)
     elif is_roi:
-        # Dual-input model: pass both image and position map
         score = model.evaluate([x_test, dataset.pos_test.astype("float32")], y_test, verbose=2)
     else:
-        # Standard single-input evaluation
         score = model.evaluate(x_test, y_test, verbose=2)
 
     loss_val, acc_val = float(score[0]), float(score[1])
@@ -375,27 +553,35 @@ def _find_experiment_dirs(root: Path) -> "list[Path]":
     return seen
 
 
-def run_single_experiment(experiment: Path, args) -> dict:
+def run_single_experiment(experiment: Path, args, mode: str) -> dict:
     """
-    Run the full evaluate-(and-optionally-retrain) pipeline on a single
-    experiment directory. Returns a small summary dict; raises on
-    unrecoverable errors (missing config.yaml, dataset load failure, etc.)
-    so the caller can decide how to handle batch failures.
+    Run the evaluate/retrain pipeline on a single experiment directory,
+    according to the chosen selection/activation ``mode``:
+
+      native_relu         - best iteration among natively-relu ones, retrain.
+      force_relu_retrain   - best iteration overall, force activation='relu', retrain.
+      force_relu_infer     - best iteration overall, force saved model's activation
+                             to 'relu', inference only (no retrain).
+
+    Returns a small summary dict; raises on unrecoverable errors (missing
+    config.yaml, dataset load failure, etc.) so the caller can decide how to
+    handle batch failures.
     """
+    assert mode in SELECTION_MODES, f"Unknown selection mode: {mode}"
+    require_relu = (mode == "native_relu")
+    do_retrain = mode in ("native_relu", "force_relu_retrain")
+    load_saved_model = mode in ("force_relu_retrain", "force_relu_infer")
+
     config_path = experiment / "config.yaml"
     if not config_path.exists():
         raise FileNotFoundError(f"config.yaml not found in {experiment}")
 
     # ── 0. Activate the experiment config ────────────────────────────────────
-    # exp_config uses an environment variable (EXP_CONFIG) to locate the active
-    # config.yaml; set_active_config writes that variable for the current process.
     from exp_config import set_active_config, load_cfg, reload_cfg
 
     set_active_config(config_path)
     cfg = load_cfg(force=True)
 
-    # Apply CLI overrides by patching config.yaml in-place and reloading.
-    # This ensures that any component reading load_cfg() picks up the new values.
     if args.epochs is not None or args.backend is not None:
         import yaml
 
@@ -410,85 +596,88 @@ def run_single_experiment(experiment: Path, args) -> dict:
         cfg = reload_cfg()
 
     print(f"\n{'='*60}")
-    print(f"Experiment  : {experiment}")
-    print(f"Dataset     : {cfg.dataset}")
-    print(f"Backend     : {cfg.backend}")
-    print(f"Epochs      : {cfg.epochs}")
-    print(f"Retrain     : {args.retrain}")
+    print(f"Experiment       : {experiment}")
+    print(f"Dataset          : {cfg.dataset}")
+    print(f"Backend          : {cfg.backend}")
+    print(f"Epochs           : {cfg.epochs}")
+    print(f"Selection mode   : {mode}")
+    print(f"Will retrain     : {do_retrain}")
     print(f"{'='*60}\n")
 
-
-
     # ── 1. Load the dataset ───────────────────────────────────────────────────
-    # For ROI gesture datasets, the spatial frame size (16 or 32) must be known
-    # before loading so the correct preprocessed cache is selected.
-    # Detect it from the loaded model (most reliable) or from the .out log file.
     roi_frame_size = 32
-
     print(f"\n[1] Loading dataset '{cfg.dataset}'" +
           (f" (frame_size={roi_frame_size})" if "roigesture" in cfg.dataset.lower() else "") +
           "...")
     dataset = _load_dataset(cfg.dataset, frame_size=roi_frame_size)
-    # Ensure float32 dtype for both frameworks (avoids silent type mismatches)
     dataset.data_as_float32()
     print(
         f"[1] Dataset loaded: "
         f"{dataset.X_train.shape[0]} train / {dataset.X_test.shape[0]} test samples."
     )
-    
-    # ── 2. Load the saved Keras model ────────────────────────────────────────
-    # load_keras_model (test_utils) registers LayerWiseLR as a custom object so
-    # that models saved with that optimizer can be deserialized correctly.
-    keras_model_path = experiment / "Model" / "best-model.keras"
-    if not keras_model_path.exists():
-        print(
-            f"[WARNING] {keras_model_path} not found. "
-            "Skipping pre-trained model evaluation."
-        )
-        saved_model = None
-    else:
-        print(f"\n[2] Loading model from: {keras_model_path}")
-        from test_utils import load_keras_model
-        saved_model = load_keras_model(str(keras_model_path))
-        print("[2] Model loaded.")
-        
-        
-    # ── 3. Extract the best iteration point ──────────────────────────────────
-    # Primary source: SLURM .out file — single source of truth that contains
-    # hyperparameters, layer_x_block, and scores all in one place.
-    # Fallback: algorithm_logs/ text files (hyper-neural.txt + score/acc_report.txt)
-    print(f"\n[3] Finding best iteration ...")
-    out_result = _parse_best_from_out(experiment)
-    if out_result is not None:
-        best_params, layer_x_block, best_idx, valid = out_result
-    else:
-        print("[3] No .out file found — falling back to algorithm_logs/")
-        algo_logs = experiment / "algorithm_logs"
-        best_idx = _find_best_iteration(algo_logs)
-        best_params = _load_best_params(algo_logs, best_idx)
-        layer_x_block = _find_layer_x_block(experiment, best_idx)
-    print(f"[3] layer_x_block={layer_x_block}")
-    saved_loss = valid.get("score", 0.0)
-    saved_acc = valid.get("acc", 0.0)
 
-    # ── 4. Evaluate the pre-trained model ────────────────────────────────────
-    if saved_model is not None and best_params['activation'] == 'relu':
+    # ── 2. Find the best iteration, subject to the selection-mode policy ─────
+    print(f"\n[2] Finding best iteration (selection-mode='{mode}', "
+          f"require_relu={require_relu})...")
+    out_result = _parse_best_from_out(experiment, require_relu=require_relu)
+    if out_result is not None:
+        best_params, layer_x_block, best_idx, best_acc, best_score = out_result
+    else:
+        print("[2] No matching .out file found — falling back to algorithm_logs/")
+        algo_logs = experiment / "algorithm_logs"
+        best_idx, best_params, metric_name, metric_value = _find_best_iteration_fallback(
+            algo_logs, require_relu=require_relu
+        )
+        layer_x_block = _find_layer_x_block(experiment, best_idx)
+        best_acc = metric_value if metric_name == "acc" else None
+        best_score = metric_value if metric_name == "score" else None
+    print(f"[2] layer_x_block={layer_x_block}")
+
+    best_params = dict(best_params)
+    original_activation = best_params.get("activation")
+    if mode == "force_relu_retrain":
+        best_params["activation"] = "relu"
+        print(f"[2] Activation forced: '{original_activation}' -> 'relu' (will be retrained).")
+    elif mode == "native_relu":
+        best_params["activation"] = "relu"  # already relu by construction; kept explicit
+    # force_relu_infer: best_params activation left as originally found; the
+    # FORCED relu is applied only to the saved model's layers for inference.
+
+    saved_loss = best_score
+    saved_acc = best_acc
+
+    # ── 3. Load the saved Keras model (only when relevant for this mode) ─────
+    saved_model = None
+    if load_saved_model:
+        keras_model_path = experiment / "Model" / "best-model.keras"
+        if not keras_model_path.exists():
+            print(
+                f"[WARNING] {keras_model_path} not found. "
+                "Skipping pre-trained model evaluation."
+            )
+        else:
+            print(f"\n[3] Loading model from: {keras_model_path}")
+            from test_utils import load_keras_model
+            saved_model = load_keras_model(str(keras_model_path))
+            print("[3] Model loaded.")
+    else:
+        print(
+            "\n[3] Skipped: in 'native_relu' mode the on-disk best-model.keras "
+            "corresponds to the OVERALL best iteration, which may differ from "
+            "the selected natively-relu iteration — so it is not evaluated."
+        )
+
+    # ── 4. Evaluate the saved model (only when relevant for this mode) ───────
+    if saved_model is not None:
+        if mode == "force_relu_infer":
+            _force_relu_activations(saved_model)
         saved_model.summary()
-        print("\n[4] Evaluating pre-trained model (best-model.keras)...")
+        print("\n[4] Evaluating saved model (best-model.keras)...")
         saved_loss, saved_acc = _eval_keras_model(saved_model, dataset, cfg)
     else:
-        # bypass loading the model becouse the best one does not have the relu activation
-        print("\n[4] No pre-trained model to evaluate. Model was not built with relu activation.")
+        print("\n[4] No saved model evaluated for this mode.")
 
-    # ── 5–6. Rebuild + retrain (only when --retrain is passed) ───────────────
-
-    # cfg.name may be a *relative* path written at tuning time (e.g.
-    # "results_gesture_new/26_03_...").  All file I/O inside training() builds
-    # paths like "{cfg.name}/Model/..." so using a relative name breaks when
-    # the script is run from a different working directory.
-    # Fix: overwrite cfg.name in config.yaml with the resolved absolute path of
-    # the experiment directory, then reload — training() will then always use
-    # the correct absolute path regardless of the current working directory.
+    # ── Fix cfg.name to an absolute path (needed by training()) ──────────────
     if str(experiment) != cfg.name:
         import yaml
         with open(config_path, "r") as f:
@@ -501,6 +690,7 @@ def run_single_experiment(experiment: Path, args) -> dict:
 
     summary = {
         "experiment": experiment,
+        "mode": mode,
         "saved_loss": saved_loss,
         "saved_acc": saved_acc,
         "best_idx": best_idx,
@@ -510,15 +700,14 @@ def run_single_experiment(experiment: Path, args) -> dict:
         "retrain_acc": None,
     }
 
-    if not args.retrain:
-        # Only print a summary of what was found and exit cleanly
+    if not do_retrain:
         print(f"\n{'='*60}")
-        print("SUMMARY  (evaluation only — pass --retrain to rebuild and retrain)")
-        if saved_model is not None:
-            print(f"  Pre-trained model  →  loss={saved_loss:.4f}  acc={saved_acc:.4f}")
-        print(f"  Best iteration     : {best_idx}")
-        print(f"  layer_x_block      : {layer_x_block}")
-        print(f"  Hyperparameters    : {best_params}")
+        print(f"SUMMARY  (mode='{mode}' — inference only)")
+        if saved_acc is not None:
+            print(f"  Saved/forced-relu model  →  loss={saved_loss:.4f}  acc={saved_acc:.4f}")
+        print(f"  Best iteration          : {best_idx}")
+        print(f"  layer_x_block           : {layer_x_block}")
+        print(f"  Hyperparameters         : {best_params}")
         print(f"{'='*60}\n")
         return summary
 
@@ -527,7 +716,6 @@ def run_single_experiment(experiment: Path, args) -> dict:
 
     if cfg.backend == "tf":
         from tensorflow_implementation import module_backend, neural_network
-        # Clear the Keras session to release GPU memory from the loaded model
         from tensorflow.keras import backend as K
         K.clear_session()
     elif cfg.backend == "torch":
@@ -536,23 +724,19 @@ def run_single_experiment(experiment: Path, args) -> dict:
         raise ValueError(f"Unsupported backend: {cfg.backend}")
 
     backend_instance = module_backend.ModuleBackend()
-    # NeuralNetwork wraps the framework-specific model and handles training;
-    # da/reg/residual are set to False — the hyperparams dict controls them.
     nn = neural_network.NeuralNetwork(
         backend=backend_instance,
         dataset=dataset,
-        da=False,
-        reg=False,
+        da=best_params.get("data_augmentation", False),
+        reg=best_params.get("reg_l2", False),
         residual=False,
     )
 
-    # build_network creates the model graph from the hyperparameter dict
     nn.build_network(best_params, layer_x_block=layer_x_block)
     print(f"[5] Model built (backend={cfg.backend}).")
 
     # ── 6. Retrain from scratch and evaluate ─────────────────────────────────
     print(f"\n[6] Retraining for {cfg.epochs} epoch(s)...")
-    # training() compiles, fits with early stopping, and returns the best score
     score, history, trained_model = nn.training(best_params)
 
     retrain_loss = float(score[0])
@@ -562,15 +746,14 @@ def run_single_experiment(experiment: Path, args) -> dict:
     summary["retrain_loss"] = retrain_loss
     summary["retrain_acc"] = retrain_acc
 
-    # ── Summary ───────────────────────────────────────────────────────────────
     print(f"\n{'='*60}")
-    print("SUMMARY")
-    if saved_model is not None:
-        print(f"  Pre-trained model  →  loss={saved_loss:.4f}  acc={saved_acc:.4f}")
-    print(f"  Retrained model    →  loss={retrain_loss:.4f}  acc={retrain_acc:.4f}")
-    print(f"  Best iteration     : {best_idx}")
-    print(f"  layer_x_block      : {layer_x_block}")
-    print(f"  Hyperparameters    : {best_params}")
+    print(f"SUMMARY  (mode='{mode}')")
+    if saved_acc is not None:
+        print(f"  Reference (pre-retrain)  →  loss={saved_loss:.4f}  acc={saved_acc:.4f}")
+    print(f"  Retrained model          →  loss={retrain_loss:.4f}  acc={retrain_acc:.4f}")
+    print(f"  Best iteration           : {best_idx}")
+    print(f"  layer_x_block            : {layer_x_block}")
+    print(f"  Hyperparameters          : {best_params}")
     print(f"{'='*60}\n")
 
     return summary
@@ -588,9 +771,11 @@ def main():
         "--experiment", required=True,
         help="Path to an experiment directory (must contain config.yaml), OR a "
              "parent directory containing one or more experiment subfolders. "
-             "In the latter case, every subfolder (at any depth) that contains "
-             "at least one SLURM '.out' file is processed as a separate "
-             "experiment (batch mode)."
+             "In the latter case (batch mode), every subfolder (at any depth) "
+             "that contains at least one SLURM '.out' file is analyzed in "
+             "REPORT-ONLY mode: no dataset/model is ever loaded and nothing "
+             "is ever retrained — only the best-overall and best-native-relu "
+             "iterations are found and printed for each."
     )
     parser.add_argument(
         "--epochs", type=int, default=None,
@@ -601,14 +786,15 @@ def main():
         help="Override the backend framework for retraining: 'tf' or 'torch' (optional)."
     )
     parser.add_argument(
-        "--retrain", action="store_true", default=False,
-        help="Rebuild the best architecture and retrain from scratch (steps 5-6). "
-             "If omitted, only evaluation of the saved model is performed (steps 1-3)."
-    )
-    parser.add_argument(
-        "--keep-going", action="store_true", default=False,
-        help="In batch mode, continue with the remaining experiments if one "
-             "fails (default: True). Kept for symmetry/explicitness."
+        "--selection-mode", type=str, default=None, choices=list(SELECTION_MODES),
+        help=(
+            "Policy for choosing the iteration and handling its activation: "
+            "'native_relu' (best iteration already trained with relu, then "
+            "retrain it), 'force_relu_retrain' (best iteration overall, force "
+            "activation to relu, then retrain), 'force_relu_infer' (best "
+            "iteration overall, force the saved model's activation to relu, "
+            "inference only). If omitted, you will be prompted interactively."
+        ),
     )
     args = parser.parse_args()
 
@@ -617,19 +803,28 @@ def main():
         print(f"[ERROR] Directory not found: {root}", file=sys.stderr)
         sys.exit(1)
 
-    # ── Decide single-experiment vs. batch mode ──────────────────────────────
+    # ── Single experiment: full pipeline (mode prompt, eval, optional retrain) ──
     if (root / "config.yaml").exists():
-        # Single-experiment mode: unchanged behaviour.
+        mode = args.selection_mode or _prompt_selection_mode()
         try:
-            run_single_experiment(root, args)
+            run_single_experiment(root, args, mode)
         except Exception as exc:
             print(f"[ERROR] {root}: {exc}", file=sys.stderr)
             sys.exit(1)
         return
 
-    # Batch mode: scan for every subfolder containing a .out file.
+    # ── Batch (parent folder): REPORT ONLY ───────────────────────────────────
+    # When a whole parent folder is passed, the script NEVER loads a dataset,
+    # NEVER loads/evaluates the saved Keras model, and NEVER retrains anything.
+    # For every experiment subfolder found it only looks up and prints two
+    # results: the best iteration overall, and the best iteration among those
+    # natively trained with activation='relu'.
     print(f"[Batch] '{root}' has no config.yaml directly — scanning for "
           f"experiment subfolders (any dir containing a '*.out' file)...")
+    print("[Batch] Report-only mode: nessun dataset/modello verra' caricato o "
+          "riaddestrato; verranno solo stampati, per ogni esperimento, il "
+          "miglior modello assoluto e il miglior modello con attivazione "
+          "'relu' nativa.")
     experiment_dirs = _find_experiment_dirs(root)
 
     if not experiment_dirs:
@@ -641,7 +836,7 @@ def main():
         print(f"  - {d}")
 
     results = []
-    failures = []
+    skipped = []
     for i, exp_dir in enumerate(experiment_dirs, start=1):
         print(f"\n{'#'*70}")
         print(f"# Batch [{i}/{len(experiment_dirs)}]  {exp_dir}")
@@ -650,51 +845,38 @@ def main():
         if not (exp_dir / "config.yaml").exists():
             msg = f"skipped — no config.yaml in {exp_dir}"
             print(f"[WARNING] {msg}")
-            failures.append((exp_dir, msg))
+            skipped.append((exp_dir, msg))
             continue
 
-        try:
-            summary = run_single_experiment(exp_dir, args)
-            results.append(summary)
-        except Exception as exc:
-            print(f"[ERROR] {exp_dir}: {exc}", file=sys.stderr)
-            failures.append((exp_dir, str(exc)))
-            # Keep going with the next experiment regardless of --keep-going;
-            # the flag exists mainly to make the intent explicit in scripts.
-            continue
+        info = _find_best_overall_and_relu(exp_dir)
+        _print_candidate("Miglior modello assoluto", info.get("overall"), info.get("overall_error"))
+        _print_candidate("Miglior modello (relu nativa)", info.get("relu"), info.get("relu_error"))
+
+        results.append({"experiment": exp_dir, **info})
 
     # ── Batch-wide summary ────────────────────────────────────────────────────
     print(f"\n{'='*70}")
-    print(f"BATCH SUMMARY  —  {len(results)} succeeded, {len(failures)} failed "
-          f"(of {len(experiment_dirs)} total)")
+    print(f"BATCH SUMMARY  —  {len(results)} esperimenti analizzati, "
+          f"{len(skipped)} saltati (su {len(experiment_dirs)} totali)")
     print(f"{'='*70}")
-    for s in results:
-        line = f"  [OK]   {s['experiment']}"
-        if s["saved_acc"] is not None:
-            line += f"  saved_acc={s['saved_acc']:.4f}"
-        if s["retrain_acc"] is not None:
-            line += f"  retrain_acc={s['retrain_acc']:.4f}"
-        print(line)
-    for d, msg in failures:
-        print(f"  [FAIL] {d}  ->  {msg}")
+    for r in results:
+        overall = r.get("overall")
+        relu = r.get("relu")
+        overall_str = (f"{overall['metric_name']}={overall['metric_value']:.4f}"
+                        if overall else "n/d")
+        relu_str = (f"{relu['metric_name']}={relu['metric_value']:.4f}"
+                    if relu else "n/d")
+        print(f"  {r['experiment']}  —  assoluto: {overall_str}  |  relu: {relu_str}")
+    for d, msg in skipped:
+        print(f"  [SKIPPED] {d}  ->  {msg}")
     print(f"{'='*70}\n")
 
-    # ── Best experiment by accuracy ───────────────────────────────────────────
-    # Prefer the retrain accuracy when available (it's the freshest number for
-    # that experiment); otherwise fall back to the saved-model accuracy.
-    def _best_acc(s: dict):
-        return s["retrain_acc"] if s["retrain_acc"] is not None else s["saved_acc"]
+    print("Esperimento con lo score/accuracy migliore, per categoria:")
+    _print_batch_best_group(results, "overall", "Miglior modello assoluto")
+    _print_batch_best_group(results, "relu", "Miglior modello (relu nativa)")
+    print()
 
-    scored = [s for s in results if _best_acc(s) is not None]
-    if scored:
-        best = max(scored, key=_best_acc)
-        which = "retrain_acc" if best["retrain_acc"] is not None else "saved_acc"
-        print(f"BEST EXPERIMENT: {best['experiment']}  "
-              f"({which}={_best_acc(best):.4f})\n")
-    else:
-        print("BEST EXPERIMENT: none — no experiment produced an accuracy score.\n")
-
-    if failures and not results:
+    if skipped and not results:
         sys.exit(1)
 
 
