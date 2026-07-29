@@ -214,22 +214,18 @@ class TunerDataset:
         test = dataset[test_split]
 
         # Helper to extract the image regardless of the column format
-        def open_image_from_row(img_field):
-            # img_field can be bytes/bytearray or a dict with key "bytes"
+        def open_image_from_row(img_field, target_size=(224, 224)):
             if isinstance(img_field, (bytes, bytearray)):
-                data = img_field
+                img = Image.open(BytesIO(img_field)).convert("RGB")
             elif isinstance(img_field, dict) and "bytes" in img_field:
-                data = img_field["bytes"]
+                img = Image.open(BytesIO(img_field["bytes"])).convert("RGB")
+            elif isinstance(img_field, Image.Image):
+                img = img_field.convert("RGB")
             else:
-                # In some datasets the image is already a PIL object (rare with parquet)
-                # or a path. Handle these cases as well.
-                if isinstance(img_field, Image.Image):
-                    return img_field.convert("RGB")
                 raise TypeError(f"Unrecognized image format: {type(img_field)}")
-            img = Image.open(BytesIO(data)).convert("RGB")
-            # Tiny-ImageNet is 64x64; ensure it in case resizing is needed
-            if img.size != (64, 64):
-                img = img.resize((64, 64))
+
+            if img.size != target_size:
+                img = img.resize(target_size, Image.Resampling.LANCZOS)
             return img
 
         # Load into lists (faster than np.concatenate in a loop)

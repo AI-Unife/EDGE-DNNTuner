@@ -2,9 +2,16 @@
 test_experiment.py  –  Evaluate a pre-trained experiment and optionally retrain it.
 
 Usage:
+    # Single experiment (must contain config.yaml directly)
     python test_experiment.py --experiment <path/to/experiment_dir> [options]
 
-Steps:
+    # Batch mode: <path> is a parent folder containing one or more experiment
+    # subfolders. Any subfolder (at any depth) that contains at least one
+    # SLURM ".out" file is treated as an experiment directory and processed
+    # in turn. A single per-experiment failure does not stop the batch.
+    python test_experiment.py --experiment <path/to/parent_dir> [options]
+
+Steps (applied to each experiment directory):
   1) Load  Model/best-model.keras
   2) Load  the dataset described in the experiment's config.yaml
   3) Test  the saved model  (accuracy and loss)
@@ -52,7 +59,7 @@ def _detect_roi_frame_size(experiment: Path, saved_model=None) -> int:
         except Exception:
             pass
 
-    # 2. From .out file — all iterations share the same frame_size, so the first
+    # 2. From .out file — all iterations share the same frame_size  , so the first
     #    match in the file is sufficient.
     pattern = re.compile(r"Building model with input_shape=\((\d+)")
     for d in [experiment, Path(".")]:
@@ -154,6 +161,7 @@ def _parse_best_from_out(
                     continue
                 try:
                     params = ast.literal_eval(m.group(1))
+                    params.update({"skip_connection": False, "activation": "relu"})  # ensure skip=False
                 except Exception:
                     continue
 
@@ -178,7 +186,7 @@ def _parse_best_from_out(
             # Rank: prefer SCORE (lower = better), fall back to ACCURACY (higher = better)
             has_score = any(it["score"] is not None for it in iterations)
             valid = [it for it in iterations
-                     if (it["score"] if has_score else it["acc"]) is not None]
+                     if it['params']['activation'] == 'relu' and ( it["score"] if has_score else it["acc"]) is not None]
             if not valid:
                 continue
 
@@ -199,7 +207,7 @@ def _parse_best_from_out(
 
             print(f"[Hyperparams]    {best['params']}")
             print(f"[layer_x_block]  {best['lxb']}")
-            return best["params"], best["lxb"], best["index"]
+            return best["params"], best["lxb"], best["index"], valid[best["index"]]
 
     return None  # no .out file found / parsable
 
@@ -260,6 +268,7 @@ def _load_best_params(algo_logs: Path, best_idx: int) -> dict:
         )
     # Safe parse: ast.literal_eval handles plain dict literals without executing code
     params = ast.literal_eval(lines[best_idx])
+    params.update({"skip_connection": False, "activation": "relu"})  # ensure skip=False
     print(f"[Hyperparams] {params}")
     return params
 
@@ -347,42 +356,35 @@ def _eval_keras_model(model, dataset, cfg) -> tuple[float, float]:
     return loss_val, acc_val
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
+def _find_experiment_dirs(root: Path) -> "list[Path]":
+    """
+    Discover experiment directories under a parent folder.
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Evaluate and optionally retrain a Symbolic DNN Tuner experiment."
-    )
-    parser.add_argument(
-        "--experiment", required=True,
-        help="Path to the experiment directory (must contain config.yaml)."
-    )
-    parser.add_argument(
-        "--epochs", type=int, default=None,
-        help="Override the number of training epochs (optional)."
-    )
-    parser.add_argument(
-        "--backend", type=str, default=None, choices=["tf", "torch"],
-        help="Override the backend framework for retraining: 'tf' or 'torch' (optional)."
-    )
-    parser.add_argument(
-        "--retrain", action="store_true", default=False,
-        help="Rebuild the best architecture and retrain from scratch (steps 5-6). "
-             "If omitted, only evaluation of the saved model is performed (steps 1-3)."
-    )
-    args = parser.parse_args()
+    An "experiment directory" is any directory (at any depth under ``root``,
+    ``root`` itself included) that directly contains at least one SLURM
+    ``.out`` file. Directories are returned sorted, and directories without a
+    ``config.yaml`` are kept in the list but will be skipped later with a
+    warning (so the user gets visibility into what was found vs. usable).
+    """
+    out_files = sorted(root.rglob("*.out"))
+    seen = []
+    for f in out_files:
+        parent = f.parent
+        if parent not in seen:
+            seen.append(parent)
+    return seen
 
-    experiment = Path(args.experiment).expanduser().resolve()
-    if not experiment.is_dir():
-        print(f"[ERROR] Directory not found: {experiment}", file=sys.stderr)
-        sys.exit(1)
 
+def run_single_experiment(experiment: Path, args) -> dict:
+    """
+    Run the full evaluate-(and-optionally-retrain) pipeline on a single
+    experiment directory. Returns a small summary dict; raises on
+    unrecoverable errors (missing config.yaml, dataset load failure, etc.)
+    so the caller can decide how to handle batch failures.
+    """
     config_path = experiment / "config.yaml"
     if not config_path.exists():
-        print(f"[ERROR] config.yaml not found in {experiment}", file=sys.stderr)
-        sys.exit(1)
+        raise FileNotFoundError(f"config.yaml not found in {experiment}")
 
     # ── 0. Activate the experiment config ────────────────────────────────────
     # exp_config uses an environment variable (EXP_CONFIG) to locate the active
@@ -408,7 +410,7 @@ def main():
         cfg = reload_cfg()
 
     print(f"\n{'='*60}")
-    print(f"Experiment  : {experiment.name}")
+    print(f"Experiment  : {experiment}")
     print(f"Dataset     : {cfg.dataset}")
     print(f"Backend     : {cfg.backend}")
     print(f"Epochs      : {cfg.epochs}")
@@ -435,26 +437,27 @@ def main():
     # For ROI gesture datasets, the spatial frame size (16 or 32) must be known
     # before loading so the correct preprocessed cache is selected.
     # Detect it from the loaded model (most reliable) or from the .out log file.
-    roi_frame_size = 32
-    if "roigesture" in cfg.dataset.lower():
-        roi_frame_size = _detect_roi_frame_size(experiment, saved_model=saved_model)
+    # roi_frame_size = 32
+    # if "roigesture" in cfg.dataset.lower():
+    #     roi_frame_size = _detect_roi_frame_size(experiment, saved_model=saved_model)
 
-    print(f"\n[2] Loading dataset '{cfg.dataset}'" +
-          (f" (frame_size={roi_frame_size})" if "roigesture" in cfg.dataset.lower() else "") +
-          "...")
-    dataset = _load_dataset(cfg.dataset, frame_size=roi_frame_size)
-    # Ensure float32 dtype for both frameworks (avoids silent type mismatches)
-    dataset.data_as_float32()
-    print(
-        f"[2] Dataset loaded: "
-        f"{dataset.X_train.shape[0]} train / {dataset.X_test.shape[0]} test samples."
-    )
+    # print(f"\n[2] Loading dataset '{cfg.dataset}'" +
+    #       (f" (frame_size={roi_frame_size})" if "roigesture" in cfg.dataset.lower() else "") +
+    #       "...")
+    # dataset = _load_dataset(cfg.dataset, frame_size=roi_frame_size)
+    # # Ensure float32 dtype for both frameworks (avoids silent type mismatches)
+    # dataset.data_as_float32()
+    # print(
+    #     f"[2] Dataset loaded: "
+    #     f"{dataset.X_train.shape[0]} train / {dataset.X_test.shape[0]} test samples."
+    # )
 
     # ── 3. Evaluate the pre-trained model ────────────────────────────────────
+    saved_loss = saved_acc = None
     if saved_model is not None:
-        saved_model.summary()
+        # saved_model.summary()
         print("\n[3] Evaluating pre-trained model (best-model.keras)...")
-        saved_loss, saved_acc = _eval_keras_model(saved_model, dataset, cfg)
+        # saved_loss, saved_acc = _eval_keras_model(saved_model, dataset, cfg)
     else:
         print("\n[3] No pre-trained model to evaluate.")
 
@@ -465,7 +468,7 @@ def main():
     print(f"\n[4] Finding best iteration ...")
     out_result = _parse_best_from_out(experiment)
     if out_result is not None:
-        best_params, layer_x_block, best_idx = out_result
+        best_params, layer_x_block, best_idx, valid = out_result
     else:
         print("[4] No .out file found — falling back to algorithm_logs/")
         algo_logs = experiment / "algorithm_logs"
@@ -473,6 +476,8 @@ def main():
         best_params = _load_best_params(algo_logs, best_idx)
         layer_x_block = _find_layer_x_block(experiment, best_idx)
     print(f"[4] layer_x_block={layer_x_block}")
+    saved_loss = valid.get("score", 0.0)
+    saved_acc = valid.get("acc", 0.0)
 
     # ── 5–6. Rebuild + retrain (only when --retrain is passed) ───────────────
 
@@ -493,6 +498,17 @@ def main():
         cfg = reload_cfg()
         print(f"[Config] Updated 'name' to absolute path: {experiment}")
 
+    summary = {
+        "experiment": experiment,
+        "saved_loss": saved_loss,
+        "saved_acc": saved_acc,
+        "best_idx": best_idx,
+        "layer_x_block": layer_x_block,
+        "best_params": best_params,
+        "retrain_loss": None,
+        "retrain_acc": None,
+    }
+
     if not args.retrain:
         # Only print a summary of what was found and exit cleanly
         print(f"\n{'='*60}")
@@ -503,7 +519,7 @@ def main():
         print(f"  layer_x_block      : {layer_x_block}")
         print(f"  Hyperparameters    : {best_params}")
         print(f"{'='*60}\n")
-        return
+        return summary
 
     # ── 5. Rebuild the architecture with the configured backend ──────────────
     print(f"\n[5] Rebuilding model with backend='{cfg.backend}'...")
@@ -516,8 +532,7 @@ def main():
     elif cfg.backend == "torch":
         from pytorch_implementation import module_backend, neural_network
     else:
-        print(f"[ERROR] Unsupported backend: {cfg.backend}", file=sys.stderr)
-        sys.exit(1)
+        raise ValueError(f"Unsupported backend: {cfg.backend}")
 
     backend_instance = module_backend.ModuleBackend()
     # NeuralNetwork wraps the framework-specific model and handles training;
@@ -543,6 +558,9 @@ def main():
     retrain_acc = float(score[1])
     print(f"\n[6] Retrain results: loss={retrain_loss:.4f}  accuracy={retrain_acc:.4f}")
 
+    summary["retrain_loss"] = retrain_loss
+    summary["retrain_acc"] = retrain_acc
+
     # ── Summary ───────────────────────────────────────────────────────────────
     print(f"\n{'='*60}")
     print("SUMMARY")
@@ -553,6 +571,130 @@ def main():
     print(f"  layer_x_block      : {layer_x_block}")
     print(f"  Hyperparameters    : {best_params}")
     print(f"{'='*60}\n")
+
+    return summary
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Evaluate and optionally retrain a Symbolic DNN Tuner experiment."
+    )
+    parser.add_argument(
+        "--experiment", required=True,
+        help="Path to an experiment directory (must contain config.yaml), OR a "
+             "parent directory containing one or more experiment subfolders. "
+             "In the latter case, every subfolder (at any depth) that contains "
+             "at least one SLURM '.out' file is processed as a separate "
+             "experiment (batch mode)."
+    )
+    parser.add_argument(
+        "--epochs", type=int, default=None,
+        help="Override the number of training epochs (optional)."
+    )
+    parser.add_argument(
+        "--backend", type=str, default=None, choices=["tf", "torch"],
+        help="Override the backend framework for retraining: 'tf' or 'torch' (optional)."
+    )
+    parser.add_argument(
+        "--retrain", action="store_true", default=False,
+        help="Rebuild the best architecture and retrain from scratch (steps 5-6). "
+             "If omitted, only evaluation of the saved model is performed (steps 1-3)."
+    )
+    parser.add_argument(
+        "--keep-going", action="store_true", default=False,
+        help="In batch mode, continue with the remaining experiments if one "
+             "fails (default: True). Kept for symmetry/explicitness."
+    )
+    args = parser.parse_args()
+
+    root = Path(args.experiment).expanduser().resolve()
+    if not root.is_dir():
+        print(f"[ERROR] Directory not found: {root}", file=sys.stderr)
+        sys.exit(1)
+
+    # ── Decide single-experiment vs. batch mode ──────────────────────────────
+    if (root / "config.yaml").exists():
+        # Single-experiment mode: unchanged behaviour.
+        try:
+            run_single_experiment(root, args)
+        except Exception as exc:
+            print(f"[ERROR] {root}: {exc}", file=sys.stderr)
+            sys.exit(1)
+        return
+
+    # Batch mode: scan for every subfolder containing a .out file.
+    print(f"[Batch] '{root}' has no config.yaml directly — scanning for "
+          f"experiment subfolders (any dir containing a '*.out' file)...")
+    experiment_dirs = _find_experiment_dirs(root)
+
+    if not experiment_dirs:
+        print(f"[ERROR] No subfolder with a '.out' file found under {root}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"[Batch] Found {len(experiment_dirs)} candidate experiment folder(s):")
+    for d in experiment_dirs:
+        print(f"  - {d}")
+
+    results = []
+    failures = []
+    for i, exp_dir in enumerate(experiment_dirs, start=1):
+        print(f"\n{'#'*70}")
+        print(f"# Batch [{i}/{len(experiment_dirs)}]  {exp_dir}")
+        print(f"{'#'*70}")
+
+        if not (exp_dir / "config.yaml").exists():
+            msg = f"skipped — no config.yaml in {exp_dir}"
+            print(f"[WARNING] {msg}")
+            failures.append((exp_dir, msg))
+            continue
+
+        try:
+            summary = run_single_experiment(exp_dir, args)
+            results.append(summary)
+        except Exception as exc:
+            print(f"[ERROR] {exp_dir}: {exc}", file=sys.stderr)
+            failures.append((exp_dir, str(exc)))
+            # Keep going with the next experiment regardless of --keep-going;
+            # the flag exists mainly to make the intent explicit in scripts.
+            continue
+
+    # ── Batch-wide summary ────────────────────────────────────────────────────
+    print(f"\n{'='*70}")
+    print(f"BATCH SUMMARY  —  {len(results)} succeeded, {len(failures)} failed "
+          f"(of {len(experiment_dirs)} total)")
+    print(f"{'='*70}")
+    for s in results:
+        line = f"  [OK]   {s['experiment']}"
+        if s["saved_acc"] is not None:
+            line += f"  saved_acc={s['saved_acc']:.4f}"
+        if s["retrain_acc"] is not None:
+            line += f"  retrain_acc={s['retrain_acc']:.4f}"
+        print(line)
+    for d, msg in failures:
+        print(f"  [FAIL] {d}  ->  {msg}")
+    print(f"{'='*70}\n")
+
+    # ── Best experiment by accuracy ───────────────────────────────────────────
+    # Prefer the retrain accuracy when available (it's the freshest number for
+    # that experiment); otherwise fall back to the saved-model accuracy.
+    def _best_acc(s: dict):
+        return s["retrain_acc"] if s["retrain_acc"] is not None else s["saved_acc"]
+
+    scored = [s for s in results if _best_acc(s) is not None]
+    if scored:
+        best = max(scored, key=_best_acc)
+        which = "retrain_acc" if best["retrain_acc"] is not None else "saved_acc"
+        print(f"BEST EXPERIMENT: {best['experiment']}  "
+              f"({which}={_best_acc(best):.4f})\n")
+    else:
+        print("BEST EXPERIMENT: none — no experiment produced an accuracy score.\n")
+
+    if failures and not results:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

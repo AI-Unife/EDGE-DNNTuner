@@ -36,7 +36,7 @@ class search_space:
         Define the base search space reflecting the backbone of the neural network.
         Returns the created `skopt.space.Space`.
         """
-        self.big_space = (self.cfg.opt in ['standard', 'RS']) or ("cim" in self.cfg.dataset)
+        self.big_space = (self.cfg.opt in ['standard', 'RS']) or ("bean" in self.cfg.dataset)
         self.search_space = Space([
             Categorical(name='num_neurons', categories=[4, 8, 16, 32]),
             Integer(1, 4,  name='unit_c1'),
@@ -52,7 +52,7 @@ class search_space:
 
         ])
         if self.big_space:
-            for d in range(1,3):
+            for d in range(1,4):
                 dense_name = f"fc_{d}"
                 self.search_space.dimensions.append(Integer(0, 32, name=dense_name))
         for b in range(1, max_block + 1):

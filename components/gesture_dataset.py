@@ -451,7 +451,7 @@ def get_ROI_numpy(cfg, frame_size: int = 32) -> Tuple[Tuple[np.ndarray, np.ndarr
         ((x_train, y_train), (x_test, y_test))
     """
     dataset_path = "rois_and_coordinates/datasets/"
-    cache_dir = f"./cache/DVS_ROI_reshaped_{frame_size}_{cfg.mode}_{cfg.frames}_{cfg.channels}/"
+    cache_dir = f"./cache/DVS_ROI_{frame_size}_{cfg.mode}_{cfg.frames}_{cfg.channels}/"
     output_size = (frame_size, frame_size, 2)
     _ensure_cache_dir(cache_dir)
     print("cache_dir:", cache_dir)
@@ -480,7 +480,7 @@ def get_ROI_numpy(cfg, frame_size: int = 32) -> Tuple[Tuple[np.ndarray, np.ndarr
         train=True,
         transform=transform,
         target_transform=target_transform,
-        position_transform=ROIMapTransform(n_time_bins=cfg.frames, output_size=output_size),
+        position_transform=ROIMapTransform(n_time_bins=cfg.frames, output_size=(frame_size, frame_size, 1)),
     )
     print("Loaded ROI training dataset with", len(train), "samples.")
     test = DVSGestureROI(
@@ -489,7 +489,7 @@ def get_ROI_numpy(cfg, frame_size: int = 32) -> Tuple[Tuple[np.ndarray, np.ndarr
         train=False,
         transform=transform,
         target_transform=target_transform,
-        position_transform=ROIMapTransform(n_time_bins=cfg.frames, output_size=output_size),
+        position_transform=ROIMapTransform(n_time_bins=cfg.frames, output_size=(frame_size, frame_size, 1)),
     )
 
     cached_train = tonic.DiskCachedDataset(train, cache_path=os.path.join(cache_dir, "train"))

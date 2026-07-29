@@ -368,11 +368,11 @@ class ResultsAnalyzer:
             self.config = {}
 
     def get_best_result(self) -> Optional[ExperimentResult]:
-        """Return the best result (lowest score)"""
-        valid_results = [r for r in self.results if r.score is not None]
+        """Return the best result (highest accuracy)"""
+        valid_results = [r for r in self.results if r.accuracy is not None]
         if not valid_results:
             return None
-        return min(valid_results, key=lambda r: r.score)
+        return max(valid_results, key=lambda r: r.accuracy if r.accuracy is not None else float('-inf'))  # Best accuracy
     
     def save_experiment_csv(self, output_csv: Path) -> bool:
         """

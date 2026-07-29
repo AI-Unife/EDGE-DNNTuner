@@ -42,7 +42,7 @@ class controller:
         # Internal counters
         self.count_new_fc = 0
         self.count_new_cv = 0
-        self.max_fc = 8
+        self.max_fc = 15
         self.start_conv = 2
         self.max_conv = self.count_max_conv(base_blocks=self.start_conv)
         self.count_no_probs = 0
@@ -129,7 +129,7 @@ class controller:
         self.nn.residual = residual
 
     def set_reg_l2(self, reg: bool) -> None:
-        """Enable/disable data augmentation for the next training call."""
+        """Enable/disable L2 regularization for the next training call."""
         self.reg = reg
         self.nn.reg = reg
 
