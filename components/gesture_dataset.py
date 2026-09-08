@@ -412,7 +412,7 @@ def get_datasets_numpy(cfg):
     tfms: List = [
         transforms.Denoise(filter_time=10000),
         transforms.Downsample(sensor_size=tonic.datasets.DVSGesture.sensor_size, target_size=(64, 64)),
-        transforms.ToFrame(sensor_size=(64, 64, 2), n_time_bins=cfg.frames),
+        transforms.ToFrame(sensor_size=(64, 64, 2), time_window=10000, )# n_time_bins=cfg.frames),
     ]
 
     # Labels repeated across time if the model expects temporal supervision
@@ -460,7 +460,7 @@ def get_ROI_numpy(cfg, frame_size: int = 32) -> Tuple[Tuple[np.ndarray, np.ndarr
         transforms.Denoise(filter_time=10000),
         # Downsample and ToFrame expect 2D spatial sizes (H, W) only, not including polarity
         transforms.Downsample(sensor_size=(32, 32), target_size=(frame_size, frame_size)),
-        transforms.ToFrame(sensor_size=(frame_size, frame_size, 2), n_time_bins=cfg.frames),
+        transforms.ToFrame(sensor_size=(frame_size, frame_size, 2), time_window=10000) # n_time_bins=cfg.frames),
     ]
 
     if cfg.mode == "fwdPass":
@@ -480,7 +480,7 @@ def get_ROI_numpy(cfg, frame_size: int = 32) -> Tuple[Tuple[np.ndarray, np.ndarr
         train=True,
         transform=transform,
         target_transform=target_transform,
-        position_transform=ROIMapTransform(n_time_bins=cfg.frames, output_size=(frame_size, frame_size, 1)),
+        position_transform=ROIMapTransform(time_window=10000, output_size=(frame_size, frame_size, 1)),# n_time_bins=cfg.frames
     )
     print("Loaded ROI training dataset with", len(train), "samples.")
     test = DVSGestureROI(
@@ -489,7 +489,7 @@ def get_ROI_numpy(cfg, frame_size: int = 32) -> Tuple[Tuple[np.ndarray, np.ndarr
         train=False,
         transform=transform,
         target_transform=target_transform,
-        position_transform=ROIMapTransform(n_time_bins=cfg.frames, output_size=(frame_size, frame_size, 1)),
+        position_transform=ROIMapTransform(time_window=10000, output_size=(frame_size, frame_size, 1)), # n_time_bins=cfg.frames, 
     )
 
     cached_train = tonic.DiskCachedDataset(train, cache_path=os.path.join(cache_dir, "train"))

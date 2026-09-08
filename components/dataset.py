@@ -261,7 +261,7 @@ class TunerDataset:
         print(f"\tX_test:{len(x_test)}")
         print(f"\tY_test:{len(y_test)}")
 
-    def load_gesture(self):
+    def ªload_gesture(self):
         """Load DVSGesture dataset using the specialized gesture_dataset module."""
         from components.gesture_dataset import gesture_data
         

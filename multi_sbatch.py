@@ -1,10 +1,10 @@
 import subprocess
 from itertools import product
 
-datasets_cifar = ['beans']
-optimizers = ['filtered', 'RS_ruled', 'basic', 'standard', 'RS']
-seeds = [42, 123, 96, 7, 84]
-weights = [0.5]  # Example weights for flops and latency in the combined score
+datasets_cifar = ['cifar10']
+optimizers = ['filtered', 'RS_ruled']
+seeds = [42, 7, 84] #123, 96, 
+weights = [0.5, 0.3]  # Example weights for flops and latency in the combined score
 
 
 def generate_jobs():
@@ -24,12 +24,12 @@ def generate_jobs():
 
 def save_job_configs_to_file(job_configs, filename="params.txt"):
     # Sort by dataset
-    job_configs = sorted(job_configs, key=lambda x: x["data_name"])
+    job_configs = sorted(job_configs, key=lambda x: x["weight"])
 
     with open(filename, "w") as f:
         for config in job_configs:
             line = ",".join(str(config[k]) for k in ["data_name", "opt", "seed", "weight"])
-            f.write(line + ",flops_module\n")
+            f.write(line + ",hardware_module\n")
             
 # generate_params.py
 from pathlib import Path
@@ -63,9 +63,9 @@ def generate_params_file(output_path: str = "params.txt"):
     print(f"✅ File '{output_path}' generato con {len(lines)} combinazioni.")
 
 def main():
-    # job_configs = generate_jobs()
-    # save_job_configs_to_file(job_configs, "params_beans.txt")
-    generate_params_file()
+    job_configs = generate_jobs()
+    save_job_configs_to_file(job_configs, "params_cifar10.txt")
+    # generate_params_file()
 
 if __name__ == "__main__":
     main()

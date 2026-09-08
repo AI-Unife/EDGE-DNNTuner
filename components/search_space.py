@@ -38,18 +38,17 @@ class search_space:
         """
         self.big_space = (self.cfg.opt in ['standard', 'RS']) or ("bean" in self.cfg.dataset)
         self.search_space = Space([
-            Categorical(name='num_neurons', categories=[4, 8, 16, 32]),
+            Categorical(name='num_neurons', categories=[8, 16, 32, 64]),
             Integer(1, 4,  name='unit_c1'),
             Integer(1, 8, name='unit_c2'),
             Real(0.03, 0.5,  name='dr_f'),
             Real(1e-4, 1e-3, name='learning_rate'),
             Categorical(categories=[8, 16, 32, 64],  name='batch_size'),
             Categorical(['Adam', 'Adamax', 'SGD', 'Adagrad', 'Adadelta'], name='optimizer'),
-            Categorical(['relu', 'elu', 'selu', 'swish'], name='activation'),
+            Categorical(['relu', 'elu', 'selu', 'swish'], name='activation'), #, 'elu', 'selu', 'swish'
             Categorical(name='data_augmentation', categories=[False, True] if self.cfg.opt in ['standard', 'RS'] else [False]),
             Categorical(name="reg_l2", categories=[False, True] if self.cfg.opt in ['standard', 'RS'] else [False]),
             Categorical(name="skip_connection", categories=[False, True] if self.cfg.opt in ['standard', 'RS'] else [False])
-
         ])
         if self.big_space:
             for d in range(1,4):

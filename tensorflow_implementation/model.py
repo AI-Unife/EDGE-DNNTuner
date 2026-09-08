@@ -57,7 +57,7 @@ class TFModel(TunerModel):
         self.n_classes = n_classes
         self.is_roi = is_roi
         self.pos_input_shape = pos_input_shape
-        self.residual = params.get("skip_connection", False)
+        self.residual = False # params.get("skip_connection", False)
         self.reg = params.get("reg_l2", False)
         self.da = params.get("data_augmentation", False)
 

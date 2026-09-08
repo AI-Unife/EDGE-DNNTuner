@@ -210,18 +210,6 @@ class controller:
             smoothed.append(smoothed_val)
             last = smoothed_val
         return smoothed
-
-    def manage_configuration(self) -> None:
-        """
-        If present, invoke the energy module to select a better runtime configuration.
-        """
-        energy_name = "energy_module"
-        if energy_name in self.modules.modules_name:
-            index = self.modules.modules_name.index(energy_name)
-            try:
-                self.modules.modules_obj[index].fix_configuration()
-            except Exception as e:  # robust to module-specific issues
-                print("[ERROR]Energy module failed to fix configuration: %s", e)
                 
                 
     # ------------------------------ Training ---------------------------------

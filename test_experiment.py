@@ -3,7 +3,8 @@ test_experiment.py  –  Evaluate a pre-trained experiment and optionally retrai
 
 Usage:
     # Single experiment (must contain config.yaml directly)
-    python test_experiment.py --experiment <path/to/experiment_dir> [--selection-mode MODE]
+    python test_experiment.py --experiment <path/to/experiment_dir> \
+        [--selection-mode MODE] [--activation relu|selu]
 
     # Batch mode (REPORT ONLY): <path> is a parent folder containing one or
     # more experiment subfolders. Any subfolder (at any depth) that contains
@@ -11,27 +12,33 @@ Usage:
     # In this mode the script NEVER loads a dataset, NEVER loads/evaluates the
     # saved Keras model, and NEVER retrains anything — for each experiment it
     # only looks up and prints the best iteration overall and the best
-    # iteration among those natively trained with activation='relu'.
-    # --selection-mode/--epochs/--backend are ignored in this mode.
-    python test_experiment.py --experiment <path/to/parent_dir>
+    # iteration among those natively trained with the target activation.
+    # --selection-mode/--epochs/--backend are ignored in this mode
+    # (--activation is still used to decide which "native" activation to
+    # report on).
+    python test_experiment.py --experiment <path/to/parent_dir> [--activation relu|selu]
 
 Selection / activation policy (--selection-mode), chosen once per run (asked
-interactively if not passed on the command line):
+interactively if not passed on the command line). The TARGET activation
+(--activation, 'relu' or 'selu') is also chosen once per run:
 
-  native_relu         Find the best iteration AMONG THOSE that already used
-                       activation='relu' natively (i.e. it was the value
-                       chosen by the hyper-parameter search, not forced), and
-                       retrain that architecture from scratch.
+  native_activation        Find the best iteration AMONG THOSE that already
+                            used the TARGET activation natively (i.e. it was
+                            the value chosen by the hyper-parameter search,
+                            not forced), and retrain that architecture from
+                            scratch.
 
-  force_relu_retrain   Find the best iteration overall (regardless of its
-                       original activation), force its activation to 'relu',
-                       and retrain that architecture from scratch.
+  force_activation_retrain Find the best iteration overall (regardless of its
+                            original activation), force its activation to the
+                            TARGET activation, and retrain that architecture
+                            from scratch.
 
-  force_relu_infer     Find the best iteration overall (regardless of its
-                       original activation), load the corresponding saved
-                       Keras model (Model/best-model.keras), force its
-                       layers' activation to 'relu' at inference time, and
-                       only evaluate it (no retraining).
+  force_activation_infer   Find the best iteration overall (regardless of its
+                            original activation), load the corresponding saved
+                            Keras model (Model/best-model.keras), force its
+                            layers' activation to the TARGET activation at
+                            inference time, and only evaluate it (no
+                            retraining).
 
 Steps (applied to each experiment directory):
   1) Load  the dataset described in the experiment's config.yaml
@@ -39,10 +46,10 @@ Steps (applied to each experiment directory):
            from the SLURM .out log, or — as a fallback — from
            algorithm_logs/hyper-neural.txt using score_report.txt as the
            index (acc_report.txt as fallback)
-  3) Load  Model/best-model.keras                (modes: force_relu_retrain, force_relu_infer)
-  4) Test  the saved model  (accuracy and loss)   (modes: force_relu_retrain, force_relu_infer)
-  5) Rebuild the same architecture with the configured backend (tf or torch)  (modes: native_relu, force_relu_retrain)
-  6) Retrain and test                                                         (modes: native_relu, force_relu_retrain)
+  3) Load  Model/best-model.keras                (modes: force_activation_retrain, force_activation_infer)
+  4) Test  the saved model  (accuracy and loss)   (modes: force_activation_retrain, force_activation_infer)
+  5) Rebuild the same architecture with the configured backend (tf or torch)  (modes: native_activation, force_activation_retrain)
+  6) Retrain and test                                                         (modes: native_activation, force_activation_retrain)
 """
 from __future__ import annotations
 
@@ -54,18 +61,19 @@ import sys
 from pathlib import Path
 
 
-SELECTION_MODES = ("native_relu", "force_relu_retrain", "force_relu_infer")
+SELECTION_MODES = ("native_activation", "force_activation_retrain", "force_activation_infer")
+SUPPORTED_ACTIVATIONS = ("relu", "selu")
 
 SELECTION_MODE_PROMPTS = {
-    "1": ("native_relu",
-          "Trova il miglior modello che ha GIA' 'relu' come attivazione fin "
+    "1": ("native_activation",
+          "Trova il miglior modello che ha GIA' l'attivazione scelta fin "
           "dall'origine, e riaddestra quello."),
-    "2": ("force_relu_retrain",
-          "Prendi il modello migliore in assoluto, imposta l'attivazione a "
-          "'relu' e riaddestralo da zero."),
-    "3": ("force_relu_infer",
-          "Prendi il modello migliore in assoluto, imposta l'attivazione a "
-          "'relu' e fai SOLO inferenza (nessun riaddestramento)."),
+    "2": ("force_activation_retrain",
+          "Prendi il modello migliore in assoluto, imposta l'attivazione "
+          "scelta e riaddestralo da zero."),
+    "3": ("force_activation_infer",
+          "Prendi il modello migliore in assoluto, imposta l'attivazione "
+          "scelta e fai SOLO inferenza (nessun riaddestramento)."),
 }
 
 
@@ -80,6 +88,25 @@ def _prompt_selection_mode() -> str:
             mode = SELECTION_MODE_PROMPTS[choice][0]
             print(f"[Selection mode] '{mode}' selezionato.\n")
             return mode
+        print("Scelta non valida, riprova.")
+
+
+def _prompt_activation() -> str:
+    """Ask the user, once per run, which target activation to use."""
+    print("\nSeleziona l'attivazione target:")
+    for i, act in enumerate(SUPPORTED_ACTIVATIONS, start=1):
+        print(f"  {i}) {act}")
+    while True:
+        choice = input(f"Scelta [1-{len(SUPPORTED_ACTIVATIONS)}]: ").strip()
+        if choice.isdigit() and 1 <= int(choice) <= len(SUPPORTED_ACTIVATIONS):
+            activation = SUPPORTED_ACTIVATIONS[int(choice) - 1]
+            print(f"[Activation] '{activation}' selezionata.\n")
+            return activation
+        # Also accept the activation name typed directly
+        if choice.lower() in SUPPORTED_ACTIVATIONS:
+            activation = choice.lower()
+            print(f"[Activation] '{activation}' selezionata.\n")
+            return activation
         print("Scelta non valida, riprova.")
 
 
@@ -165,7 +192,7 @@ def _load_dataset(dataset_name: str, frame_size: int = 32):
 
 def _parse_best_from_out(
     experiment: Path,
-    require_relu: bool = False,
+    require_activation: "str | None" = None,
 ) -> "tuple[dict, int, int, float, float] | None":
     """
     Parse a SLURM .out log and extract the best iteration's hyperparameters,
@@ -182,9 +209,10 @@ def _parse_best_from_out(
       - SCORE  is available → minimise (lower combined score is better)
       - SCORE  not available → maximise ACCURACY
 
-    If ``require_relu`` is True, only iterations whose original hyperparameters
-    already used activation='relu' are considered candidates (this implements
-    the 'native_relu' selection mode).
+    If ``require_activation`` is set (e.g. 'relu' or 'selu'), only iterations
+    whose original hyperparameters already used that activation are
+    considered candidates (this implements the 'native_activation' selection
+    mode). If ``require_activation`` is None, no activation filter is applied.
 
     Search order: experiment directory first, then current working directory.
 
@@ -240,7 +268,7 @@ def _parse_best_from_out(
             has_score = any(it["score"] is not None for it in iterations)
             valid = [
                 it for it in iterations
-                if (not require_relu or it["params"].get("activation") == "relu")
+                if (require_activation is None or it["params"].get("activation") == require_activation)
                 and (it["score"] if has_score else it["acc"]) is not None
             ]
             if not valid:
@@ -269,7 +297,7 @@ def _parse_best_from_out(
 
 
 def _find_best_iteration_fallback(
-    algo_logs: Path, require_relu: bool = False
+    algo_logs: Path, require_activation: "str | None" = None
 ) -> "tuple[int, dict, str, float]":
     """
     Fallback selection (used when no .out file is available): rank iterations
@@ -277,8 +305,9 @@ def _find_best_iteration_fallback(
     (higher = better), reading the corresponding hyperparameters from
     hyper-neural.txt (same line index).
 
-    If ``require_relu`` is True, only iterations whose hyperparameters already
-    used activation='relu' are considered (the 'native_relu' selection mode).
+    If ``require_activation`` is set (e.g. 'relu' or 'selu'), only iterations
+    whose hyperparameters already used that activation are considered (the
+    'native_activation' selection mode). If None, no filter is applied.
 
     Returns:
         (best_idx, params_dict, metric_name, metric_value)
@@ -326,12 +355,12 @@ def _find_best_iteration_fallback(
             continue
         if i >= len(all_params) or all_params[i] is None:
             continue
-        if require_relu and all_params[i].get("activation") != "relu":
+        if require_activation is not None and all_params[i].get("activation") != require_activation:
             continue
         candidates.append(i)
 
     if not candidates:
-        scope = " con activation='relu'" if require_relu else ""
+        scope = f" con activation='{require_activation}'" if require_activation else ""
         raise ValueError(f"Nessuna iterazione valida{scope} trovata in {algo_logs}")
 
     if use_score:
@@ -348,11 +377,12 @@ def _find_best_iteration_fallback(
     return best_idx, params, metric_name, values[best_idx]
 
 
-def _find_best_overall_and_relu(experiment: Path) -> dict:
+def _find_best_overall_and_activation(experiment: Path, activation: str) -> dict:
     """
     For a single experiment directory, find BOTH:
       - the best iteration overall (any activation)
-      - the best iteration among those natively trained with activation='relu'
+      - the best iteration among those natively trained with the TARGET
+        activation (e.g. 'relu' or 'selu')
 
     without touching the dataset or any saved Keras model — this is used by
     batch mode, which only reports these two results and never loads data,
@@ -360,16 +390,16 @@ def _find_best_overall_and_relu(experiment: Path) -> dict:
 
     Returns a dict:
         {
-          "overall": {"idx", "params", "layer_x_block", "metric_name", "metric_value"} | None,
+          "overall":    {"idx", "params", "layer_x_block", "metric_name", "metric_value"} | None,
           "overall_error": str            # present only if "overall" is None
-          "relu":    {"idx", "params", "layer_x_block", "metric_name", "metric_value"} | None,
-          "relu_error": str                # present only if "relu" is None
+          "activation": {"idx", "params", "layer_x_block", "metric_name", "metric_value"} | None,
+          "activation_error": str          # present only if "activation" is None
         }
     """
-    result: dict = {"overall": None, "relu": None}
+    result: dict = {"overall": None, "activation": None}
 
-    out_overall = _parse_best_from_out(experiment, require_relu=False)
-    out_relu = _parse_best_from_out(experiment, require_relu=True)
+    out_overall = _parse_best_from_out(experiment, require_activation=None)
+    out_native = _parse_best_from_out(experiment, require_activation=activation)
 
     def _pack_from_out(out_result):
         params, lxb, idx, acc, score = out_result
@@ -379,31 +409,31 @@ def _find_best_overall_and_relu(experiment: Path) -> dict:
 
     if out_overall is not None:
         result["overall"] = _pack_from_out(out_overall)
-    if out_relu is not None:
-        result["relu"] = _pack_from_out(out_relu)
+    if out_native is not None:
+        result["activation"] = _pack_from_out(out_native)
 
-    if out_overall is None or out_relu is None:
+    if out_overall is None or out_native is None:
         algo_logs = experiment / "algorithm_logs"
         if out_overall is None:
             try:
                 idx, params, metric_name, metric_value = _find_best_iteration_fallback(
-                    algo_logs, require_relu=False
+                    algo_logs, require_activation=None
                 )
                 lxb = _find_layer_x_block(experiment, idx)
                 result["overall"] = {"idx": idx, "params": params, "layer_x_block": lxb,
                                       "metric_name": metric_name, "metric_value": metric_value}
             except Exception as exc:
                 result["overall_error"] = str(exc)
-        if out_relu is None:
+        if out_native is None:
             try:
                 idx, params, metric_name, metric_value = _find_best_iteration_fallback(
-                    algo_logs, require_relu=True
+                    algo_logs, require_activation=activation
                 )
                 lxb = _find_layer_x_block(experiment, idx)
-                result["relu"] = {"idx": idx, "params": params, "layer_x_block": lxb,
-                                   "metric_name": metric_name, "metric_value": metric_value}
+                result["activation"] = {"idx": idx, "params": params, "layer_x_block": lxb,
+                                         "metric_name": metric_name, "metric_value": metric_value}
             except Exception as exc:
-                result["relu_error"] = str(exc)
+                result["activation_error"] = str(exc)
 
     return result
 
@@ -412,10 +442,10 @@ def _print_candidate(label: str, cand: "dict | None", error: "str | None" = None
     """Pretty-print a single best-iteration candidate (or the reason it's missing)."""
     if cand is None:
         msg = error or "nessuna iterazione trovata"
-        print(f"  {label:<28}: NON TROVATO — {msg}")
+        print(f"  {label:<32}: NON TROVATO — {msg}")
         return
     print(
-        f"  {label:<28}: iterazione={cand['idx']}  layer_x_block={cand['layer_x_block']}  "
+        f"  {label:<32}: iterazione={cand['idx']}  layer_x_block={cand['layer_x_block']}  "
         f"{cand['metric_name']}={cand['metric_value']:.4f}"
     )
     print(f"    hyperparams: {cand['params']}")
@@ -424,7 +454,7 @@ def _print_candidate(label: str, cand: "dict | None", error: "str | None" = None
 def _print_batch_best_group(results: "list[dict]", key: str, group_label: str) -> None:
     """
     Across all experiments in a batch, print which one obtained the best value
-    for ``key`` ("overall" or "relu"), separately for score-ranked and
+    for ``key`` ("overall" or "activation"), separately for score-ranked and
     accuracy-ranked experiments (the two metrics aren't comparable directly).
     """
     cands = [(r["experiment"], r[key]) for r in results if r.get(key) is not None]
@@ -474,23 +504,29 @@ def _find_layer_x_block(experiment: Path, best_idx: int) -> int:
     return 2
 
 
-def _force_relu_activations(model) -> None:
+def _force_activation(model, activation: str) -> None:
     """
-    Monkey-patch every layer's stored activation function to ReLU, in place.
+    Monkey-patch every layer's stored activation function to the TARGET
+    activation ('relu' or 'selu'), in place.
 
-    This is used only by the 'force_relu_infer' selection mode: it swaps the
-    activation of an ALREADY TRAINED model at inference time (weights are not
-    retrained/recompiled), purely to measure how the saved checkpoint behaves
-    if its activation had been 'relu'.
+    This is used only by the 'force_activation_infer' selection mode: it
+    swaps the activation of an ALREADY TRAINED model at inference time
+    (weights are not retrained/recompiled), purely to measure how the saved
+    checkpoint behaves if its activation had been the target one.
     """
     import tensorflow as tf
+
+    if activation not in SUPPORTED_ACTIVATIONS:
+        raise ValueError(
+            f"Unsupported activation '{activation}'. Supported: {SUPPORTED_ACTIVATIONS}"
+        )
 
     changed = 0
     for layer in model.layers:
         if hasattr(layer, "activation") and layer.activation is not None:
-            layer.activation = tf.keras.activations.get("relu")
+            layer.activation = tf.keras.activations.get(activation)
             changed += 1
-    print(f"[Force ReLU] Patched activation on {changed} layer(s) of the saved model.")
+    print(f"[Force {activation}] Patched activation on {changed} layer(s) of the saved model.")
 
 
 def _eval_keras_model(model, dataset, cfg) -> tuple[float, float]:
@@ -553,24 +589,29 @@ def _find_experiment_dirs(root: Path) -> "list[Path]":
     return seen
 
 
-def run_single_experiment(experiment: Path, args, mode: str) -> dict:
+def run_single_experiment(experiment: Path, args, mode: str, activation: str) -> dict:
     """
     Run the evaluate/retrain pipeline on a single experiment directory,
-    according to the chosen selection/activation ``mode``:
+    according to the chosen selection/activation ``mode`` and TARGET
+    ``activation`` ('relu' or 'selu'):
 
-      native_relu         - best iteration among natively-relu ones, retrain.
-      force_relu_retrain   - best iteration overall, force activation='relu', retrain.
-      force_relu_infer     - best iteration overall, force saved model's activation
-                             to 'relu', inference only (no retrain).
+      native_activation        - best iteration among natively-target-activation
+                                  ones, retrain.
+      force_activation_retrain - best iteration overall, force activation to
+                                  the target, retrain.
+      force_activation_infer   - best iteration overall, force saved model's
+                                  activation to the target, inference only
+                                  (no retrain).
 
     Returns a small summary dict; raises on unrecoverable errors (missing
     config.yaml, dataset load failure, etc.) so the caller can decide how to
     handle batch failures.
     """
     assert mode in SELECTION_MODES, f"Unknown selection mode: {mode}"
-    require_relu = (mode == "native_relu")
-    do_retrain = mode in ("native_relu", "force_relu_retrain")
-    load_saved_model = mode in ("force_relu_retrain", "force_relu_infer")
+    assert activation in SUPPORTED_ACTIVATIONS, f"Unsupported activation: {activation}"
+    require_activation = activation if mode == "native_activation" else None
+    do_retrain = mode in ("native_activation", "force_activation_retrain")
+    load_saved_model = mode in ("force_activation_retrain", "force_activation_infer")
 
     config_path = experiment / "config.yaml"
     if not config_path.exists():
@@ -601,6 +642,7 @@ def run_single_experiment(experiment: Path, args, mode: str) -> dict:
     print(f"Backend          : {cfg.backend}")
     print(f"Epochs           : {cfg.epochs}")
     print(f"Selection mode   : {mode}")
+    print(f"Target activation: {activation}")
     print(f"Will retrain     : {do_retrain}")
     print(f"{'='*60}\n")
 
@@ -618,15 +660,15 @@ def run_single_experiment(experiment: Path, args, mode: str) -> dict:
 
     # ── 2. Find the best iteration, subject to the selection-mode policy ─────
     print(f"\n[2] Finding best iteration (selection-mode='{mode}', "
-          f"require_relu={require_relu})...")
-    out_result = _parse_best_from_out(experiment, require_relu=require_relu)
+          f"require_activation={require_activation})...")
+    out_result = _parse_best_from_out(experiment, require_activation=require_activation)
     if out_result is not None:
         best_params, layer_x_block, best_idx, best_acc, best_score = out_result
     else:
         print("[2] No matching .out file found — falling back to algorithm_logs/")
         algo_logs = experiment / "algorithm_logs"
         best_idx, best_params, metric_name, metric_value = _find_best_iteration_fallback(
-            algo_logs, require_relu=require_relu
+            algo_logs, require_activation=require_activation
         )
         layer_x_block = _find_layer_x_block(experiment, best_idx)
         best_acc = metric_value if metric_name == "acc" else None
@@ -635,13 +677,13 @@ def run_single_experiment(experiment: Path, args, mode: str) -> dict:
 
     best_params = dict(best_params)
     original_activation = best_params.get("activation")
-    if mode == "force_relu_retrain":
-        best_params["activation"] = "relu"
-        print(f"[2] Activation forced: '{original_activation}' -> 'relu' (will be retrained).")
-    elif mode == "native_relu":
-        best_params["activation"] = "relu"  # already relu by construction; kept explicit
-    # force_relu_infer: best_params activation left as originally found; the
-    # FORCED relu is applied only to the saved model's layers for inference.
+    if mode == "force_activation_retrain":
+        best_params["activation"] = activation
+        print(f"[2] Activation forced: '{original_activation}' -> '{activation}' (will be retrained).")
+    elif mode == "native_activation":
+        best_params["activation"] = activation  # already this activation by construction; kept explicit
+    # force_activation_infer: best_params activation left as originally found; the
+    # FORCED activation is applied only to the saved model's layers for inference.
 
     saved_loss = best_score
     saved_acc = best_acc
@@ -662,15 +704,15 @@ def run_single_experiment(experiment: Path, args, mode: str) -> dict:
             print("[3] Model loaded.")
     else:
         print(
-            "\n[3] Skipped: in 'native_relu' mode the on-disk best-model.keras "
+            "\n[3] Skipped: in 'native_activation' mode the on-disk best-model.keras "
             "corresponds to the OVERALL best iteration, which may differ from "
-            "the selected natively-relu iteration — so it is not evaluated."
+            "the selected natively-target-activation iteration — so it is not evaluated."
         )
 
     # ── 4. Evaluate the saved model (only when relevant for this mode) ───────
     if saved_model is not None:
-        if mode == "force_relu_infer":
-            _force_relu_activations(saved_model)
+        if mode == "force_activation_infer":
+            _force_activation(saved_model, activation)
         saved_model.summary()
         print("\n[4] Evaluating saved model (best-model.keras)...")
         saved_loss, saved_acc = _eval_keras_model(saved_model, dataset, cfg)
@@ -691,6 +733,7 @@ def run_single_experiment(experiment: Path, args, mode: str) -> dict:
     summary = {
         "experiment": experiment,
         "mode": mode,
+        "activation": activation,
         "saved_loss": saved_loss,
         "saved_acc": saved_acc,
         "best_idx": best_idx,
@@ -702,9 +745,9 @@ def run_single_experiment(experiment: Path, args, mode: str) -> dict:
 
     if not do_retrain:
         print(f"\n{'='*60}")
-        print(f"SUMMARY  (mode='{mode}' — inference only)")
+        print(f"SUMMARY  (mode='{mode}', activation='{activation}' — inference only)")
         if saved_acc is not None:
-            print(f"  Saved/forced-relu model  →  loss={saved_loss:.4f}  acc={saved_acc:.4f}")
+            print(f"  Saved/forced model       →  loss={saved_loss:.4f}  acc={saved_acc:.4f}")
         print(f"  Best iteration          : {best_idx}")
         print(f"  layer_x_block           : {layer_x_block}")
         print(f"  Hyperparameters         : {best_params}")
@@ -738,6 +781,7 @@ def run_single_experiment(experiment: Path, args, mode: str) -> dict:
     # ── 6. Retrain from scratch and evaluate ─────────────────────────────────
     print(f"\n[6] Retraining for {cfg.epochs} epoch(s)...")
     score, history, trained_model = nn.training(best_params)
+    nn.save_model(name="retrained-model.keras")
 
     retrain_loss = float(score[0])
     retrain_acc = float(score[1])
@@ -747,7 +791,7 @@ def run_single_experiment(experiment: Path, args, mode: str) -> dict:
     summary["retrain_acc"] = retrain_acc
 
     print(f"\n{'='*60}")
-    print(f"SUMMARY  (mode='{mode}')")
+    print(f"SUMMARY  (mode='{mode}', activation='{activation}')")
     if saved_acc is not None:
         print(f"  Reference (pre-retrain)  →  loss={saved_loss:.4f}  acc={saved_acc:.4f}")
     print(f"  Retrained model          →  loss={retrain_loss:.4f}  acc={retrain_acc:.4f}")
@@ -774,8 +818,8 @@ def main():
              "In the latter case (batch mode), every subfolder (at any depth) "
              "that contains at least one SLURM '.out' file is analyzed in "
              "REPORT-ONLY mode: no dataset/model is ever loaded and nothing "
-             "is ever retrained — only the best-overall and best-native-relu "
-             "iterations are found and printed for each."
+             "is ever retrained — only the best-overall and best-native-target-"
+             "activation iterations are found and printed for each."
     )
     parser.add_argument(
         "--epochs", type=int, default=None,
@@ -789,11 +833,20 @@ def main():
         "--selection-mode", type=str, default=None, choices=list(SELECTION_MODES),
         help=(
             "Policy for choosing the iteration and handling its activation: "
-            "'native_relu' (best iteration already trained with relu, then "
-            "retrain it), 'force_relu_retrain' (best iteration overall, force "
-            "activation to relu, then retrain), 'force_relu_infer' (best "
-            "iteration overall, force the saved model's activation to relu, "
-            "inference only). If omitted, you will be prompted interactively."
+            "'native_activation' (best iteration already trained with the target "
+            "activation, then retrain it), 'force_activation_retrain' (best "
+            "iteration overall, force activation to the target, then retrain), "
+            "'force_activation_infer' (best iteration overall, force the saved "
+            "model's activation to the target, inference only). If omitted, you "
+            "will be prompted interactively."
+        ),
+    )
+    parser.add_argument(
+        "--activation", type=str, default=None, choices=list(SUPPORTED_ACTIVATIONS),
+        help=(
+            "Target activation function to use for the 'native'/'force' "
+            "selection logic: 'relu' or 'selu'. If omitted, you will be "
+            "prompted interactively (only when needed)."
         ),
     )
     args = parser.parse_args()
@@ -806,11 +859,12 @@ def main():
     # ── Single experiment: full pipeline (mode prompt, eval, optional retrain) ──
     if (root / "config.yaml").exists():
         mode = args.selection_mode or _prompt_selection_mode()
-        try:
-            run_single_experiment(root, args, mode)
-        except Exception as exc:
-            print(f"[ERROR] {root}: {exc}", file=sys.stderr)
-            sys.exit(1)
+        activation = args.activation or _prompt_activation()
+        # try:
+        run_single_experiment(root, args, mode, activation)
+        # except Exception as exc:
+        #     print(f"[ERROR] {root}: {exc}", file=sys.stderr)
+        #     sys.exit(1)
         return
 
     # ── Batch (parent folder): REPORT ONLY ───────────────────────────────────
@@ -818,13 +872,15 @@ def main():
     # NEVER loads/evaluates the saved Keras model, and NEVER retrains anything.
     # For every experiment subfolder found it only looks up and prints two
     # results: the best iteration overall, and the best iteration among those
-    # natively trained with activation='relu'.
+    # natively trained with the target activation.
+    activation = args.activation or _prompt_activation()
+
     print(f"[Batch] '{root}' has no config.yaml directly — scanning for "
           f"experiment subfolders (any dir containing a '*.out' file)...")
-    print("[Batch] Report-only mode: nessun dataset/modello verra' caricato o "
-          "riaddestrato; verranno solo stampati, per ogni esperimento, il "
-          "miglior modello assoluto e il miglior modello con attivazione "
-          "'relu' nativa.")
+    print(f"[Batch] Report-only mode: nessun dataset/modello verra' caricato o "
+          f"riaddestrato; verranno solo stampati, per ogni esperimento, il "
+          f"miglior modello assoluto e il miglior modello con attivazione "
+          f"'{activation}' nativa.")
     experiment_dirs = _find_experiment_dirs(root)
 
     if not experiment_dirs:
@@ -848,32 +904,32 @@ def main():
             skipped.append((exp_dir, msg))
             continue
 
-        info = _find_best_overall_and_relu(exp_dir)
+        info = _find_best_overall_and_activation(exp_dir, activation)
         _print_candidate("Miglior modello assoluto", info.get("overall"), info.get("overall_error"))
-        _print_candidate("Miglior modello (relu nativa)", info.get("relu"), info.get("relu_error"))
+        _print_candidate(f"Miglior modello ({activation} nativa)", info.get("activation"), info.get("activation_error"))
 
         results.append({"experiment": exp_dir, **info})
 
     # ── Batch-wide summary ────────────────────────────────────────────────────
     print(f"\n{'='*70}")
     print(f"BATCH SUMMARY  —  {len(results)} esperimenti analizzati, "
-          f"{len(skipped)} saltati (su {len(experiment_dirs)} totali)")
+          f"{len(skipped)} saltati (su {len(experiment_dirs)} totali)  —  attivazione target: {activation}")
     print(f"{'='*70}")
     for r in results:
         overall = r.get("overall")
-        relu = r.get("relu")
+        native = r.get("activation")
         overall_str = (f"{overall['metric_name']}={overall['metric_value']:.4f}"
                         if overall else "n/d")
-        relu_str = (f"{relu['metric_name']}={relu['metric_value']:.4f}"
-                    if relu else "n/d")
-        print(f"  {r['experiment']}  —  assoluto: {overall_str}  |  relu: {relu_str}")
+        native_str = (f"{native['metric_name']}={native['metric_value']:.4f}"
+                      if native else "n/d")
+        print(f"  {r['experiment']}  —  assoluto: {overall_str}  |  {activation}: {native_str}")
     for d, msg in skipped:
         print(f"  [SKIPPED] {d}  ->  {msg}")
     print(f"{'='*70}\n")
 
     print("Esperimento con lo score/accuracy migliore, per categoria:")
     _print_batch_best_group(results, "overall", "Miglior modello assoluto")
-    _print_batch_best_group(results, "relu", "Miglior modello (relu nativa)")
+    _print_batch_best_group(results, "activation", f"Miglior modello ({activation} nativa)")
     print()
 
     if skipped and not results:

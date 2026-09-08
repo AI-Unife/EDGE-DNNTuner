@@ -229,13 +229,13 @@ def parse_args() -> argparse.Namespace:
                         help="Verbosity level (0: silent, 1: print space, 2: print space and model summary)")
     parser.add_argument('--w_flops', type=float, default=0.3,
                         help="Weight Flops loss")
-    parser.add_argument('--w_HW', type=float, default=0.33,
+    parser.add_argument('--w_HW', type=float, default=0.30,
                         help="Weight HW loss")
     parser.add_argument('--lacc', type=float, default=0.30,
                         help="if 1-acc>lacc --> Underfitting")
-    parser.add_argument('--flops_th', type=int, default=150000000,
+    parser.add_argument('--flops_th', type=int, default=150000000000,
                          help="Max number of FLOPS")
-    parser.add_argument('--nparams_th', type=int, default=150000000,
+    parser.add_argument('--nparams_th', type=int, default=300000,
                         help="Max number of PARAMS")
     parser.add_argument(
         "--opt", type=str, default="filtered",
