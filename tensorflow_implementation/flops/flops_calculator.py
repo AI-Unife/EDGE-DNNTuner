@@ -114,7 +114,11 @@ def analyze_model(initial_model, input_shapes=None):
 
 if __name__ == "__main__":
 
-    im = VGG16()
+    # im = VGG16()
+    import tensorflow_implementation.neural_network as nn
+    im = nn.neural_network()
+    params = {'num_neurons': 16, 'unit_c1': 1, 'unit_c2': 4, 'dr_f': 0.7988537971539356, 'learning_rate': 0.00013514026186437788, 'batch_size': 64, 'optimizer': 'Adamax', 'activation': 'selu', 'data_augmentation': True, 'reg_l2': False, 'skip_connection': True, 'new_fc_1': -1, 'new_fc_2': 0, 'new_fc_3': 0, 'new_fc_4': 0, 'new_fc_5': 0, 'new_fc_6': -1, 'new_fc_7': 0, 'new_fc_8': 0, 'new_fc_9': -1, 'new_fc_10': -1}
+    im.build_model(params)
 
     f, r_dict = analyze_model(im)
 

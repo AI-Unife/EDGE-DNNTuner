@@ -369,12 +369,12 @@ class NeuralNetwork(BaseNeuralNetwork):
             score = self.model.model.evaluate(X_test, self.dataset.Y_test, verbose=2)
         return score
     
-    def save_model(self):
+    def save_model(self, name="best-model.keras"):
         """Helper to handle safe model saving."""
         if self.model.model is None: return
         try:
             save_path = os.path.join(self.exp_cfg.name, "Model")
             os.makedirs(save_path, exist_ok=True)
-            self.model.model.save(os.path.join(save_path, "best-model.keras"))
+            self.model.model.save(os.path.join(save_path, name))
         except Exception as e:
             print(f"[ERROR] Failed to save best model: {e}")

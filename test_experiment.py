@@ -2,16 +2,54 @@
 test_experiment.py  –  Evaluate a pre-trained experiment and optionally retrain it.
 
 Usage:
-    python test_experiment.py --experiment <path/to/experiment_dir> [options]
+    # Single experiment (must contain config.yaml directly)
+    python test_experiment.py --experiment <path/to/experiment_dir> \
+        [--selection-mode MODE] [--activation relu|selu]
 
-Steps:
-  1) Load  Model/best-model.keras
-  2) Load  the dataset described in the experiment's config.yaml
-  3) Test  the saved model  (accuracy and loss)
-  4) Find  the best iteration from algorithm_logs/hyper-neural.txt
-           using score_report.txt as the index (acc_report.txt as fallback)
-  5) Rebuild the same architecture with the configured backend (tf or torch)
-  6) Retrain and test  (only when --retrain is passed)
+    # Batch mode (REPORT ONLY): <path> is a parent folder containing one or
+    # more experiment subfolders. Any subfolder (at any depth) that contains
+    # at least one SLURM ".out" file is treated as an experiment directory.
+    # In this mode the script NEVER loads a dataset, NEVER loads/evaluates the
+    # saved Keras model, and NEVER retrains anything — for each experiment it
+    # only looks up and prints the best iteration overall and the best
+    # iteration among those natively trained with the target activation.
+    # --selection-mode/--epochs/--backend are ignored in this mode
+    # (--activation is still used to decide which "native" activation to
+    # report on).
+    python test_experiment.py --experiment <path/to/parent_dir> [--activation relu|selu]
+
+Selection / activation policy (--selection-mode), chosen once per run (asked
+interactively if not passed on the command line). The TARGET activation
+(--activation, 'relu' or 'selu') is also chosen once per run:
+
+  native_activation        Find the best iteration AMONG THOSE that already
+                            used the TARGET activation natively (i.e. it was
+                            the value chosen by the hyper-parameter search,
+                            not forced), and retrain that architecture from
+                            scratch.
+
+  force_activation_retrain Find the best iteration overall (regardless of its
+                            original activation), force its activation to the
+                            TARGET activation, and retrain that architecture
+                            from scratch.
+
+  force_activation_infer   Find the best iteration overall (regardless of its
+                            original activation), load the corresponding saved
+                            Keras model (Model/best-model.keras), force its
+                            layers' activation to the TARGET activation at
+                            inference time, and only evaluate it (no
+                            retraining).
+
+Steps (applied to each experiment directory):
+  1) Load  the dataset described in the experiment's config.yaml
+  2) Find  the best iteration (subject to the chosen selection-mode policy)
+           from the SLURM .out log, or — as a fallback — from
+           algorithm_logs/hyper-neural.txt using score_report.txt as the
+           index (acc_report.txt as fallback)
+  3) Load  Model/best-model.keras                (modes: force_activation_retrain, force_activation_infer)
+  4) Test  the saved model  (accuracy and loss)   (modes: force_activation_retrain, force_activation_infer)
+  5) Rebuild the same architecture with the configured backend (tf or torch)  (modes: native_activation, force_activation_retrain)
+  6) Retrain and test                                                         (modes: native_activation, force_activation_retrain)
 """
 from __future__ import annotations
 
@@ -21,6 +59,55 @@ import os
 import re
 import sys
 from pathlib import Path
+
+
+SELECTION_MODES = ("native_activation", "force_activation_retrain", "force_activation_infer")
+SUPPORTED_ACTIVATIONS = ("relu", "selu")
+
+SELECTION_MODE_PROMPTS = {
+    "1": ("native_activation",
+          "Trova il miglior modello che ha GIA' l'attivazione scelta fin "
+          "dall'origine, e riaddestra quello."),
+    "2": ("force_activation_retrain",
+          "Prendi il modello migliore in assoluto, imposta l'attivazione "
+          "scelta e riaddestralo da zero."),
+    "3": ("force_activation_infer",
+          "Prendi il modello migliore in assoluto, imposta l'attivazione "
+          "scelta e fai SOLO inferenza (nessun riaddestramento)."),
+}
+
+
+def _prompt_selection_mode() -> str:
+    """Ask the user, once per run, which selection/activation policy to use."""
+    print("\nSeleziona la modalita' di scelta del modello / attivazione:")
+    for key, (_, desc) in SELECTION_MODE_PROMPTS.items():
+        print(f"  {key}) {desc}")
+    while True:
+        choice = input("Scelta [1/2/3]: ").strip()
+        if choice in SELECTION_MODE_PROMPTS:
+            mode = SELECTION_MODE_PROMPTS[choice][0]
+            print(f"[Selection mode] '{mode}' selezionato.\n")
+            return mode
+        print("Scelta non valida, riprova.")
+
+
+def _prompt_activation() -> str:
+    """Ask the user, once per run, which target activation to use."""
+    print("\nSeleziona l'attivazione target:")
+    for i, act in enumerate(SUPPORTED_ACTIVATIONS, start=1):
+        print(f"  {i}) {act}")
+    while True:
+        choice = input(f"Scelta [1-{len(SUPPORTED_ACTIVATIONS)}]: ").strip()
+        if choice.isdigit() and 1 <= int(choice) <= len(SUPPORTED_ACTIVATIONS):
+            activation = SUPPORTED_ACTIVATIONS[int(choice) - 1]
+            print(f"[Activation] '{activation}' selezionata.\n")
+            return activation
+        # Also accept the activation name typed directly
+        if choice.lower() in SUPPORTED_ACTIVATIONS:
+            activation = choice.lower()
+            print(f"[Activation] '{activation}' selezionata.\n")
+            return activation
+        print("Scelta non valida, riprova.")
 
 
 # ---------------------------------------------------------------------------
@@ -39,11 +126,9 @@ def _detect_roi_frame_size(experiment: Path, saved_model=None) -> int:
          first occurrence of "Building model with input_shape=(H," and reads H.
       3. Default: 32.
     """
-    # 1. From loaded Keras model: input_shape is (None, H, W, C) → H = frame_size
     if saved_model is not None:
         try:
             shape = saved_model.input_shape
-            # Multi-input models (ROI) expose a list of shapes; take the first branch
             if isinstance(shape, list):
                 shape = shape[0]
             frame_size = int(shape[1])
@@ -52,8 +137,6 @@ def _detect_roi_frame_size(experiment: Path, saved_model=None) -> int:
         except Exception:
             pass
 
-    # 2. From .out file — all iterations share the same frame_size, so the first
-    #    match in the file is sufficient.
     pattern = re.compile(r"Building model with input_shape=\((\d+)")
     for d in [experiment, Path(".")]:
         for out_file in sorted(d.glob("*.out")):
@@ -109,7 +192,8 @@ def _load_dataset(dataset_name: str, frame_size: int = 32):
 
 def _parse_best_from_out(
     experiment: Path,
-) -> "tuple[dict, int, int] | None":
+    require_activation: "str | None" = None,
+) -> "tuple[dict, int, int, float, float] | None":
     """
     Parse a SLURM .out log and extract the best iteration's hyperparameters,
     layer_x_block, and 0-based iteration index — all from a single source of truth.
@@ -125,11 +209,16 @@ def _parse_best_from_out(
       - SCORE  is available → minimise (lower combined score is better)
       - SCORE  not available → maximise ACCURACY
 
+    If ``require_activation`` is set (e.g. 'relu' or 'selu'), only iterations
+    whose original hyperparameters already used that activation are
+    considered candidates (this implements the 'native_activation' selection
+    mode). If ``require_activation`` is None, no activation filter is applied.
+
     Search order: experiment directory first, then current working directory.
 
     Returns:
-        (params_dict, layer_x_block, iteration_index_0based)
-        or None if no parsable .out file is found.
+        (params_dict, layer_x_block, iteration_index_0based, best_acc, best_score)
+        or None if no parsable / matching .out file is found.
     """
     for d in [experiment, Path(".")]:
         for out_file in sorted(d.glob("*.out")):
@@ -177,8 +266,11 @@ def _parse_best_from_out(
 
             # Rank: prefer SCORE (lower = better), fall back to ACCURACY (higher = better)
             has_score = any(it["score"] is not None for it in iterations)
-            valid = [it for it in iterations
-                     if (it["score"] if has_score else it["acc"]) is not None]
+            valid = [
+                it for it in iterations
+                if (require_activation is None or it["params"].get("activation") == require_activation)
+                and (it["score"] if has_score else it["acc"]) is not None
+            ]
             if not valid:
                 continue
 
@@ -199,69 +291,186 @@ def _parse_best_from_out(
 
             print(f"[Hyperparams]    {best['params']}")
             print(f"[layer_x_block]  {best['lxb']}")
-            return best["params"], best["lxb"], best["index"]
+            return best["params"], best["lxb"], best["index"], best["acc"], best["score"]
 
-    return None  # no .out file found / parsable
+    return None  # no .out file found / parsable / matching
 
 
-def _find_best_iteration(algo_logs: Path) -> int:
-    """Fallback: return the 0-based index of the best iteration from log files."""
+def _find_best_iteration_fallback(
+    algo_logs: Path, require_activation: "str | None" = None
+) -> "tuple[int, dict, str, float]":
+    """
+    Fallback selection (used when no .out file is available): rank iterations
+    using score_report.txt (preferred, lower = better) or acc_report.txt
+    (higher = better), reading the corresponding hyperparameters from
+    hyper-neural.txt (same line index).
+
+    If ``require_activation`` is set (e.g. 'relu' or 'selu'), only iterations
+    whose hyperparameters already used that activation are considered (the
+    'native_activation' selection mode). If None, no filter is applied.
+
+    Returns:
+        (best_idx, params_dict, metric_name, metric_value)
+        where metric_name is "score" or "acc".
+    """
+    hyper_path = algo_logs / "hyper-neural.txt"
+    if not hyper_path.exists():
+        raise FileNotFoundError(f"hyper-neural.txt not found in {algo_logs}")
+
+    lines = [l.strip() for l in hyper_path.read_text().splitlines() if l.strip()]
+    all_params: "list[dict | None]" = []
+    for l in lines:
+        try:
+            all_params.append(ast.literal_eval(l))
+        except Exception:
+            all_params.append(None)
+
     score_path = algo_logs / "score_report.txt"
     acc_path = algo_logs / "acc_report.txt"
 
     if score_path.exists():
-        # Parse all non-empty, non-"None" lines as floats
-        values = [
-            float(l.strip())
-            for l in score_path.read_text().splitlines()
-            if l.strip() and l.strip().lower() != "none"
-        ]
-        if not values:
-            raise ValueError(f"score_report.txt is empty in {algo_logs}")
-        # The best iteration has the lowest combined score
-        best_idx = min(range(len(values)), key=lambda i: values[i])
-        print(
-            f"[Selection] score_report.txt — best iteration: {best_idx} "
-            f"(score={values[best_idx]:.4f})"
-        )
+        raw_lines = score_path.read_text().splitlines()
+        use_score = True
+        source_name = "score_report.txt"
     elif acc_path.exists():
-        # Fallback: use validation accuracy (higher is better)
-        values = [
-            float(l.strip())
-            for l in acc_path.read_text().splitlines()
-            if l.strip() and l.strip().lower() != "none"
-        ]
-        if not values:
-            raise ValueError(f"acc_report.txt is empty in {algo_logs}")
-        best_idx = max(range(len(values)), key=lambda i: values[i])
-        print(
-            f"[Selection] acc_report.txt — best iteration: {best_idx} "
-            f"(acc={values[best_idx]:.4f})"
-        )
+        raw_lines = acc_path.read_text().splitlines()
+        use_score = False
+        source_name = "acc_report.txt"
     else:
         raise FileNotFoundError(
             f"Neither score_report.txt nor acc_report.txt found in {algo_logs}"
         )
 
-    return best_idx
+    values: "list[float | None]" = []
+    for l in raw_lines:
+        l = l.strip()
+        if not l or l.lower() == "none":
+            values.append(None)
+        else:
+            values.append(float(l))
 
+    candidates = []
+    for i, v in enumerate(values):
+        if v is None:
+            continue
+        if i >= len(all_params) or all_params[i] is None:
+            continue
+        if require_activation is not None and all_params[i].get("activation") != require_activation:
+            continue
+        candidates.append(i)
 
-def _load_best_params(algo_logs: Path, best_idx: int) -> dict:
-    """Read line best_idx from hyper-neural.txt and parse it into a dict."""
-    hyper_path = algo_logs / "hyper-neural.txt"
-    if not hyper_path.exists():
-        raise FileNotFoundError(f"hyper-neural.txt not found in {algo_logs}")
+    if not candidates:
+        scope = f" con activation='{require_activation}'" if require_activation else ""
+        raise ValueError(f"Nessuna iterazione valida{scope} trovata in {algo_logs}")
 
-    # Each line is a Python dict literal written by ObjectiveWrapper.objective()
-    lines = [l.strip() for l in hyper_path.read_text().splitlines() if l.strip()]
-    if best_idx >= len(lines):
-        raise IndexError(
-            f"best_idx={best_idx} out of range: hyper-neural.txt has {len(lines)} lines."
-        )
-    # Safe parse: ast.literal_eval handles plain dict literals without executing code
-    params = ast.literal_eval(lines[best_idx])
+    if use_score:
+        best_idx = min(candidates, key=lambda i: values[i])
+        metric_name = "score"
+        print(f"[Selection] {source_name} — best iteration: {best_idx} (score={values[best_idx]:.4f})")
+    else:
+        best_idx = max(candidates, key=lambda i: values[i])
+        metric_name = "acc"
+        print(f"[Selection] {source_name} — best iteration: {best_idx} (acc={values[best_idx]:.4f})")
+
+    params = dict(all_params[best_idx])
     print(f"[Hyperparams] {params}")
-    return params
+    return best_idx, params, metric_name, values[best_idx]
+
+
+def _find_best_overall_and_activation(experiment: Path, activation: str) -> dict:
+    """
+    For a single experiment directory, find BOTH:
+      - the best iteration overall (any activation)
+      - the best iteration among those natively trained with the TARGET
+        activation (e.g. 'relu' or 'selu')
+
+    without touching the dataset or any saved Keras model — this is used by
+    batch mode, which only reports these two results and never loads data,
+    loads a saved model, evaluates it, or retrains anything.
+
+    Returns a dict:
+        {
+          "overall":    {"idx", "params", "layer_x_block", "metric_name", "metric_value"} | None,
+          "overall_error": str            # present only if "overall" is None
+          "activation": {"idx", "params", "layer_x_block", "metric_name", "metric_value"} | None,
+          "activation_error": str          # present only if "activation" is None
+        }
+    """
+    result: dict = {"overall": None, "activation": None}
+
+    out_overall = _parse_best_from_out(experiment, require_activation=None)
+    out_native = _parse_best_from_out(experiment, require_activation=activation)
+
+    def _pack_from_out(out_result):
+        params, lxb, idx, acc, score = out_result
+        metric_name, metric_value = ("score", score) if score is not None else ("acc", acc)
+        return {"idx": idx, "params": params, "layer_x_block": lxb,
+                "metric_name": metric_name, "metric_value": metric_value}
+
+    if out_overall is not None:
+        result["overall"] = _pack_from_out(out_overall)
+    if out_native is not None:
+        result["activation"] = _pack_from_out(out_native)
+
+    if out_overall is None or out_native is None:
+        algo_logs = experiment / "algorithm_logs"
+        if out_overall is None:
+            try:
+                idx, params, metric_name, metric_value = _find_best_iteration_fallback(
+                    algo_logs, require_activation=None
+                )
+                lxb = _find_layer_x_block(experiment, idx)
+                result["overall"] = {"idx": idx, "params": params, "layer_x_block": lxb,
+                                      "metric_name": metric_name, "metric_value": metric_value}
+            except Exception as exc:
+                result["overall_error"] = str(exc)
+        if out_native is None:
+            try:
+                idx, params, metric_name, metric_value = _find_best_iteration_fallback(
+                    algo_logs, require_activation=activation
+                )
+                lxb = _find_layer_x_block(experiment, idx)
+                result["activation"] = {"idx": idx, "params": params, "layer_x_block": lxb,
+                                         "metric_name": metric_name, "metric_value": metric_value}
+            except Exception as exc:
+                result["activation_error"] = str(exc)
+
+    return result
+
+
+def _print_candidate(label: str, cand: "dict | None", error: "str | None" = None) -> None:
+    """Pretty-print a single best-iteration candidate (or the reason it's missing)."""
+    if cand is None:
+        msg = error or "nessuna iterazione trovata"
+        print(f"  {label:<32}: NON TROVATO — {msg}")
+        return
+    print(
+        f"  {label:<32}: iterazione={cand['idx']}  layer_x_block={cand['layer_x_block']}  "
+        f"{cand['metric_name']}={cand['metric_value']:.4f}"
+    )
+    print(f"    hyperparams: {cand['params']}")
+
+
+def _print_batch_best_group(results: "list[dict]", key: str, group_label: str) -> None:
+    """
+    Across all experiments in a batch, print which one obtained the best value
+    for ``key`` ("overall" or "activation"), separately for score-ranked and
+    accuracy-ranked experiments (the two metrics aren't comparable directly).
+    """
+    cands = [(r["experiment"], r[key]) for r in results if r.get(key) is not None]
+    score_cands = [(e, c) for e, c in cands if c["metric_name"] == "score"]
+    acc_cands = [(e, c) for e, c in cands if c["metric_name"] == "acc"]
+
+    if not score_cands and not acc_cands:
+        print(f"  {group_label}: nessun esperimento ha prodotto un risultato utilizzabile.")
+        return
+
+    if score_cands:
+        best_e, best_c = min(score_cands, key=lambda x: x[1]["metric_value"])
+        print(f"  {group_label} (score piu' basso)   : {best_e}  score={best_c['metric_value']:.4f}")
+    if acc_cands:
+        best_e, best_c = max(acc_cands, key=lambda x: x[1]["metric_value"])
+        print(f"  {group_label} (accuracy piu' alta) : {best_e}  acc={best_c['metric_value']:.4f}")
 
 
 def _find_layer_x_block(experiment: Path, best_idx: int) -> int:
@@ -269,13 +478,9 @@ def _find_layer_x_block(experiment: Path, best_idx: int) -> int:
     Extract the layer_x_block value used at iteration best_idx from the SLURM
     .out file produced during the tuning run.
 
-    The log line has the form:
-        Building model with input_shape=(...), ..., layer_x_block=N
-
     Search order: experiment directory first, then the current working directory.
     Falls back to 2 if no matching .out file is found.
     """
-    # Look inside the experiment dir first, then the cwd (where sbatch saves .out)
     search_dirs = [experiment, Path(".")]
     for d in search_dirs:
         out_files = sorted(d.glob("*.out"))
@@ -284,7 +489,6 @@ def _find_layer_x_block(experiment: Path, best_idx: int) -> int:
                 text = out_file.read_text(errors="replace")
             except OSError:
                 continue
-            # Split the log by iteration banners to isolate each iteration block
             blocks = re.split(r"---\s*ITERATION\s+\d+\s*---", text)
             if best_idx + 1 < len(blocks):
                 match = re.search(r"layer_x_block=(\d+)", blocks[best_idx + 1])
@@ -298,6 +502,31 @@ def _find_layer_x_block(experiment: Path, best_idx: int) -> int:
 
     print("[layer_x_block] Not found in any .out file — using default=2")
     return 2
+
+
+def _force_activation(model, activation: str) -> None:
+    """
+    Monkey-patch every layer's stored activation function to the TARGET
+    activation ('relu' or 'selu'), in place.
+
+    This is used only by the 'force_activation_infer' selection mode: it
+    swaps the activation of an ALREADY TRAINED model at inference time
+    (weights are not retrained/recompiled), purely to measure how the saved
+    checkpoint behaves if its activation had been the target one.
+    """
+    import tensorflow as tf
+
+    if activation not in SUPPORTED_ACTIVATIONS:
+        raise ValueError(
+            f"Unsupported activation '{activation}'. Supported: {SUPPORTED_ACTIVATIONS}"
+        )
+
+    changed = 0
+    for layer in model.layers:
+        if hasattr(layer, "activation") and layer.activation is not None:
+            layer.activation = tf.keras.activations.get(activation)
+            changed += 1
+    print(f"[Force {activation}] Patched activation on {changed} layer(s) of the saved model.")
 
 
 def _eval_keras_model(model, dataset, cfg) -> tuple[float, float]:
@@ -316,30 +545,24 @@ def _eval_keras_model(model, dataset, cfg) -> tuple[float, float]:
 
     n_classes = dataset.n_classes
 
-    # One-hot encode integer labels to match the training target format
     y_test = dataset.Y_test
     if y_test.ndim == 1:
         y_test = tf.keras.utils.to_categorical(y_test, n_classes)
 
     x_test = dataset.X_test.astype("float32")
 
-    # Compile with the same loss used during training; no optimizer needed for eval
     model.compile(loss="categorical_crossentropy", optimizer="adam", metrics=["accuracy"])
 
-    # Detect dataset variant
     is_roi = hasattr(dataset, "pos_test") and dataset.pos_test is not None
     is_gesture = (cfg.mode in ("fwdPass", "hybrid")) and ("gesture" in cfg.dataset)
 
     if is_gesture:
-        # Temporal evaluation: iterate over time frames and vote by majority
         from test_utils import eval_model as gesture_eval
         x_input = [x_test, dataset.pos_test] if is_roi else x_test
         score = gesture_eval(model, x_input, y_test)
     elif is_roi:
-        # Dual-input model: pass both image and position map
         score = model.evaluate([x_test, dataset.pos_test.astype("float32")], y_test, verbose=2)
     else:
-        # Standard single-input evaluation
         score = model.evaluate(x_test, y_test, verbose=2)
 
     loss_val, acc_val = float(score[0]), float(score[1])
@@ -347,53 +570,59 @@ def _eval_keras_model(model, dataset, cfg) -> tuple[float, float]:
     return loss_val, acc_val
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
+def _find_experiment_dirs(root: Path) -> "list[Path]":
+    """
+    Discover experiment directories under a parent folder.
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Evaluate and optionally retrain a Symbolic DNN Tuner experiment."
-    )
-    parser.add_argument(
-        "--experiment", required=True,
-        help="Path to the experiment directory (must contain config.yaml)."
-    )
-    parser.add_argument(
-        "--epochs", type=int, default=None,
-        help="Override the number of training epochs (optional)."
-    )
-    parser.add_argument(
-        "--backend", type=str, default=None, choices=["tf", "torch"],
-        help="Override the backend framework for retraining: 'tf' or 'torch' (optional)."
-    )
-    parser.add_argument(
-        "--retrain", action="store_true", default=False,
-        help="Rebuild the best architecture and retrain from scratch (steps 5-6). "
-             "If omitted, only evaluation of the saved model is performed (steps 1-3)."
-    )
-    args = parser.parse_args()
+    An "experiment directory" is any directory (at any depth under ``root``,
+    ``root`` itself included) that directly contains at least one SLURM
+    ``.out`` file. Directories are returned sorted, and directories without a
+    ``config.yaml`` are kept in the list but will be skipped later with a
+    warning (so the user gets visibility into what was found vs. usable).
+    """
+    out_files = sorted(root.rglob("*.out"))
+    seen = []
+    for f in out_files:
+        parent = f.parent
+        if parent not in seen:
+            seen.append(parent)
+    return seen
 
-    experiment = Path(args.experiment).expanduser().resolve()
-    if not experiment.is_dir():
-        print(f"[ERROR] Directory not found: {experiment}", file=sys.stderr)
-        sys.exit(1)
+
+def run_single_experiment(experiment: Path, args, mode: str, activation: str) -> dict:
+    """
+    Run the evaluate/retrain pipeline on a single experiment directory,
+    according to the chosen selection/activation ``mode`` and TARGET
+    ``activation`` ('relu' or 'selu'):
+
+      native_activation        - best iteration among natively-target-activation
+                                  ones, retrain.
+      force_activation_retrain - best iteration overall, force activation to
+                                  the target, retrain.
+      force_activation_infer   - best iteration overall, force saved model's
+                                  activation to the target, inference only
+                                  (no retrain).
+
+    Returns a small summary dict; raises on unrecoverable errors (missing
+    config.yaml, dataset load failure, etc.) so the caller can decide how to
+    handle batch failures.
+    """
+    assert mode in SELECTION_MODES, f"Unknown selection mode: {mode}"
+    assert activation in SUPPORTED_ACTIVATIONS, f"Unsupported activation: {activation}"
+    require_activation = activation if mode == "native_activation" else None
+    do_retrain = mode in ("native_activation", "force_activation_retrain")
+    load_saved_model = mode in ("force_activation_retrain", "force_activation_infer")
 
     config_path = experiment / "config.yaml"
     if not config_path.exists():
-        print(f"[ERROR] config.yaml not found in {experiment}", file=sys.stderr)
-        sys.exit(1)
+        raise FileNotFoundError(f"config.yaml not found in {experiment}")
 
     # ── 0. Activate the experiment config ────────────────────────────────────
-    # exp_config uses an environment variable (EXP_CONFIG) to locate the active
-    # config.yaml; set_active_config writes that variable for the current process.
     from exp_config import set_active_config, load_cfg, reload_cfg
 
     set_active_config(config_path)
     cfg = load_cfg(force=True)
 
-    # Apply CLI overrides by patching config.yaml in-place and reloading.
-    # This ensures that any component reading load_cfg() picks up the new values.
     if args.epochs is not None or args.backend is not None:
         import yaml
 
@@ -408,81 +637,89 @@ def main():
         cfg = reload_cfg()
 
     print(f"\n{'='*60}")
-    print(f"Experiment  : {experiment.name}")
-    print(f"Dataset     : {cfg.dataset}")
-    print(f"Backend     : {cfg.backend}")
-    print(f"Epochs      : {cfg.epochs}")
-    print(f"Retrain     : {args.retrain}")
+    print(f"Experiment       : {experiment}")
+    print(f"Dataset          : {cfg.dataset}")
+    print(f"Backend          : {cfg.backend}")
+    print(f"Epochs           : {cfg.epochs}")
+    print(f"Selection mode   : {mode}")
+    print(f"Target activation: {activation}")
+    print(f"Will retrain     : {do_retrain}")
     print(f"{'='*60}\n")
 
-    # ── 1. Load the saved Keras model ────────────────────────────────────────
-    # load_keras_model (test_utils) registers LayerWiseLR as a custom object so
-    # that models saved with that optimizer can be deserialized correctly.
-    keras_model_path = experiment / "Model" / "best-model.keras"
-    if not keras_model_path.exists():
-        print(
-            f"[WARNING] {keras_model_path} not found. "
-            "Skipping pre-trained model evaluation."
-        )
-        saved_model = None
-    else:
-        print(f"\n[1] Loading model from: {keras_model_path}")
-        from test_utils import load_keras_model
-        saved_model = load_keras_model(str(keras_model_path))
-        print("[1] Model loaded.")
-
-    # ── 2. Load the dataset ───────────────────────────────────────────────────
-    # For ROI gesture datasets, the spatial frame size (16 or 32) must be known
-    # before loading so the correct preprocessed cache is selected.
-    # Detect it from the loaded model (most reliable) or from the .out log file.
+    # ── 1. Load the dataset ───────────────────────────────────────────────────
     roi_frame_size = 32
-    if "roigesture" in cfg.dataset.lower():
-        roi_frame_size = _detect_roi_frame_size(experiment, saved_model=saved_model)
-
-    print(f"\n[2] Loading dataset '{cfg.dataset}'" +
+    print(f"\n[1] Loading dataset '{cfg.dataset}'" +
           (f" (frame_size={roi_frame_size})" if "roigesture" in cfg.dataset.lower() else "") +
           "...")
     dataset = _load_dataset(cfg.dataset, frame_size=roi_frame_size)
-    # Ensure float32 dtype for both frameworks (avoids silent type mismatches)
     dataset.data_as_float32()
     print(
-        f"[2] Dataset loaded: "
+        f"[1] Dataset loaded: "
         f"{dataset.X_train.shape[0]} train / {dataset.X_test.shape[0]} test samples."
     )
 
-    # ── 3. Evaluate the pre-trained model ────────────────────────────────────
+    # ── 2. Find the best iteration, subject to the selection-mode policy ─────
+    print(f"\n[2] Finding best iteration (selection-mode='{mode}', "
+          f"require_activation={require_activation})...")
+    out_result = _parse_best_from_out(experiment, require_activation=require_activation)
+    if out_result is not None:
+        best_params, layer_x_block, best_idx, best_acc, best_score = out_result
+    else:
+        print("[2] No matching .out file found — falling back to algorithm_logs/")
+        algo_logs = experiment / "algorithm_logs"
+        best_idx, best_params, metric_name, metric_value = _find_best_iteration_fallback(
+            algo_logs, require_activation=require_activation
+        )
+        layer_x_block = _find_layer_x_block(experiment, best_idx)
+        best_acc = metric_value if metric_name == "acc" else None
+        best_score = metric_value if metric_name == "score" else None
+    print(f"[2] layer_x_block={layer_x_block}")
+
+    best_params = dict(best_params)
+    original_activation = best_params.get("activation")
+    if mode == "force_activation_retrain":
+        best_params["activation"] = activation
+        print(f"[2] Activation forced: '{original_activation}' -> '{activation}' (will be retrained).")
+    elif mode == "native_activation":
+        best_params["activation"] = activation  # already this activation by construction; kept explicit
+    # force_activation_infer: best_params activation left as originally found; the
+    # FORCED activation is applied only to the saved model's layers for inference.
+
+    saved_loss = best_score
+    saved_acc = best_acc
+
+    # ── 3. Load the saved Keras model (only when relevant for this mode) ─────
+    saved_model = None
+    if load_saved_model:
+        keras_model_path = experiment / "Model" / "best-model.keras"
+        if not keras_model_path.exists():
+            print(
+                f"[WARNING] {keras_model_path} not found. "
+                "Skipping pre-trained model evaluation."
+            )
+        else:
+            print(f"\n[3] Loading model from: {keras_model_path}")
+            from test_utils import load_keras_model
+            saved_model = load_keras_model(str(keras_model_path))
+            print("[3] Model loaded.")
+    else:
+        print(
+            "\n[3] Skipped: in 'native_activation' mode the on-disk best-model.keras "
+            "corresponds to the OVERALL best iteration, which may differ from "
+            "the selected natively-target-activation iteration — so it is not evaluated."
+        )
+
+    # ── 4. Evaluate the saved model (only when relevant for this mode) ───────
     if saved_model is not None:
+        if mode == "force_activation_infer":
+            _force_activation(saved_model, activation)
         saved_model.summary()
-        print("\n[3] Evaluating pre-trained model (best-model.keras)...")
+        print("\n[4] Evaluating saved model (best-model.keras)...")
         saved_loss, saved_acc = _eval_keras_model(saved_model, dataset, cfg)
     else:
-        print("\n[3] No pre-trained model to evaluate.")
+        print("\n[4] No saved model evaluated for this mode.")
 
-    # ── 4. Extract the best iteration point ──────────────────────────────────
-    # Primary source: SLURM .out file — single source of truth that contains
-    # hyperparameters, layer_x_block, and scores all in one place.
-    # Fallback: algorithm_logs/ text files (hyper-neural.txt + score/acc_report.txt)
-    print(f"\n[4] Finding best iteration ...")
-    out_result = _parse_best_from_out(experiment)
-    if out_result is not None:
-        best_params, layer_x_block, best_idx = out_result
-    else:
-        print("[4] No .out file found — falling back to algorithm_logs/")
-        algo_logs = experiment / "algorithm_logs"
-        best_idx = _find_best_iteration(algo_logs)
-        best_params = _load_best_params(algo_logs, best_idx)
-        layer_x_block = _find_layer_x_block(experiment, best_idx)
-    print(f"[4] layer_x_block={layer_x_block}")
-
-    # ── 5–6. Rebuild + retrain (only when --retrain is passed) ───────────────
-
-    # cfg.name may be a *relative* path written at tuning time (e.g.
-    # "results_gesture_new/26_03_...").  All file I/O inside training() builds
-    # paths like "{cfg.name}/Model/..." so using a relative name breaks when
-    # the script is run from a different working directory.
-    # Fix: overwrite cfg.name in config.yaml with the resolved absolute path of
-    # the experiment directory, then reload — training() will then always use
-    # the correct absolute path regardless of the current working directory.
+    # ── Fix cfg.name to an absolute path (needed by training()) ──────────────
     if str(experiment) != cfg.name:
         import yaml
         with open(config_path, "r") as f:
@@ -493,66 +730,210 @@ def main():
         cfg = reload_cfg()
         print(f"[Config] Updated 'name' to absolute path: {experiment}")
 
-    if not args.retrain:
-        # Only print a summary of what was found and exit cleanly
+    summary = {
+        "experiment": experiment,
+        "mode": mode,
+        "activation": activation,
+        "saved_loss": saved_loss,
+        "saved_acc": saved_acc,
+        "best_idx": best_idx,
+        "layer_x_block": layer_x_block,
+        "best_params": best_params,
+        "retrain_loss": None,
+        "retrain_acc": None,
+    }
+
+    if not do_retrain:
         print(f"\n{'='*60}")
-        print("SUMMARY  (evaluation only — pass --retrain to rebuild and retrain)")
-        if saved_model is not None:
-            print(f"  Pre-trained model  →  loss={saved_loss:.4f}  acc={saved_acc:.4f}")
-        print(f"  Best iteration     : {best_idx}")
-        print(f"  layer_x_block      : {layer_x_block}")
-        print(f"  Hyperparameters    : {best_params}")
+        print(f"SUMMARY  (mode='{mode}', activation='{activation}' — inference only)")
+        if saved_acc is not None:
+            print(f"  Saved/forced model       →  loss={saved_loss:.4f}  acc={saved_acc:.4f}")
+        print(f"  Best iteration          : {best_idx}")
+        print(f"  layer_x_block           : {layer_x_block}")
+        print(f"  Hyperparameters         : {best_params}")
         print(f"{'='*60}\n")
-        return
+        return summary
 
     # ── 5. Rebuild the architecture with the configured backend ──────────────
     print(f"\n[5] Rebuilding model with backend='{cfg.backend}'...")
 
     if cfg.backend == "tf":
         from tensorflow_implementation import module_backend, neural_network
-        # Clear the Keras session to release GPU memory from the loaded model
         from tensorflow.keras import backend as K
         K.clear_session()
     elif cfg.backend == "torch":
         from pytorch_implementation import module_backend, neural_network
     else:
-        print(f"[ERROR] Unsupported backend: {cfg.backend}", file=sys.stderr)
-        sys.exit(1)
+        raise ValueError(f"Unsupported backend: {cfg.backend}")
 
     backend_instance = module_backend.ModuleBackend()
-    # NeuralNetwork wraps the framework-specific model and handles training;
-    # da/reg/residual are set to False — the hyperparams dict controls them.
     nn = neural_network.NeuralNetwork(
         backend=backend_instance,
         dataset=dataset,
-        da=False,
-        reg=False,
+        da=best_params.get("data_augmentation", False),
+        reg=best_params.get("reg_l2", False),
         residual=False,
     )
 
-    # build_network creates the model graph from the hyperparameter dict
     nn.build_network(best_params, layer_x_block=layer_x_block)
     print(f"[5] Model built (backend={cfg.backend}).")
 
     # ── 6. Retrain from scratch and evaluate ─────────────────────────────────
     print(f"\n[6] Retraining for {cfg.epochs} epoch(s)...")
-    # training() compiles, fits with early stopping, and returns the best score
     score, history, trained_model = nn.training(best_params)
+    nn.save_model(name="retrained-model.keras")
 
     retrain_loss = float(score[0])
     retrain_acc = float(score[1])
     print(f"\n[6] Retrain results: loss={retrain_loss:.4f}  accuracy={retrain_acc:.4f}")
 
-    # ── Summary ───────────────────────────────────────────────────────────────
+    summary["retrain_loss"] = retrain_loss
+    summary["retrain_acc"] = retrain_acc
+
     print(f"\n{'='*60}")
-    print("SUMMARY")
-    if saved_model is not None:
-        print(f"  Pre-trained model  →  loss={saved_loss:.4f}  acc={saved_acc:.4f}")
-    print(f"  Retrained model    →  loss={retrain_loss:.4f}  acc={retrain_acc:.4f}")
-    print(f"  Best iteration     : {best_idx}")
-    print(f"  layer_x_block      : {layer_x_block}")
-    print(f"  Hyperparameters    : {best_params}")
+    print(f"SUMMARY  (mode='{mode}', activation='{activation}')")
+    if saved_acc is not None:
+        print(f"  Reference (pre-retrain)  →  loss={saved_loss:.4f}  acc={saved_acc:.4f}")
+    print(f"  Retrained model          →  loss={retrain_loss:.4f}  acc={retrain_acc:.4f}")
+    print(f"  Best iteration           : {best_idx}")
+    print(f"  layer_x_block            : {layer_x_block}")
+    print(f"  Hyperparameters          : {best_params}")
     print(f"{'='*60}\n")
+
+    return summary
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Evaluate and optionally retrain a Symbolic DNN Tuner experiment."
+    )
+    parser.add_argument(
+        "--experiment", required=True,
+        help="Path to an experiment directory (must contain config.yaml), OR a "
+             "parent directory containing one or more experiment subfolders. "
+             "In the latter case (batch mode), every subfolder (at any depth) "
+             "that contains at least one SLURM '.out' file is analyzed in "
+             "REPORT-ONLY mode: no dataset/model is ever loaded and nothing "
+             "is ever retrained — only the best-overall and best-native-target-"
+             "activation iterations are found and printed for each."
+    )
+    parser.add_argument(
+        "--epochs", type=int, default=None,
+        help="Override the number of training epochs (optional)."
+    )
+    parser.add_argument(
+        "--backend", type=str, default=None, choices=["tf", "torch"],
+        help="Override the backend framework for retraining: 'tf' or 'torch' (optional)."
+    )
+    parser.add_argument(
+        "--selection-mode", type=str, default=None, choices=list(SELECTION_MODES),
+        help=(
+            "Policy for choosing the iteration and handling its activation: "
+            "'native_activation' (best iteration already trained with the target "
+            "activation, then retrain it), 'force_activation_retrain' (best "
+            "iteration overall, force activation to the target, then retrain), "
+            "'force_activation_infer' (best iteration overall, force the saved "
+            "model's activation to the target, inference only). If omitted, you "
+            "will be prompted interactively."
+        ),
+    )
+    parser.add_argument(
+        "--activation", type=str, default=None, choices=list(SUPPORTED_ACTIVATIONS),
+        help=(
+            "Target activation function to use for the 'native'/'force' "
+            "selection logic: 'relu' or 'selu'. If omitted, you will be "
+            "prompted interactively (only when needed)."
+        ),
+    )
+    args = parser.parse_args()
+
+    root = Path(args.experiment).expanduser().resolve()
+    if not root.is_dir():
+        print(f"[ERROR] Directory not found: {root}", file=sys.stderr)
+        sys.exit(1)
+
+    # ── Single experiment: full pipeline (mode prompt, eval, optional retrain) ──
+    if (root / "config.yaml").exists():
+        mode = args.selection_mode or _prompt_selection_mode()
+        activation = args.activation or _prompt_activation()
+        # try:
+        run_single_experiment(root, args, mode, activation)
+        # except Exception as exc:
+        #     print(f"[ERROR] {root}: {exc}", file=sys.stderr)
+        #     sys.exit(1)
+        return
+
+    # ── Batch (parent folder): REPORT ONLY ───────────────────────────────────
+    # When a whole parent folder is passed, the script NEVER loads a dataset,
+    # NEVER loads/evaluates the saved Keras model, and NEVER retrains anything.
+    # For every experiment subfolder found it only looks up and prints two
+    # results: the best iteration overall, and the best iteration among those
+    # natively trained with the target activation.
+    activation = args.activation or _prompt_activation()
+
+    print(f"[Batch] '{root}' has no config.yaml directly — scanning for "
+          f"experiment subfolders (any dir containing a '*.out' file)...")
+    print(f"[Batch] Report-only mode: nessun dataset/modello verra' caricato o "
+          f"riaddestrato; verranno solo stampati, per ogni esperimento, il "
+          f"miglior modello assoluto e il miglior modello con attivazione "
+          f"'{activation}' nativa.")
+    experiment_dirs = _find_experiment_dirs(root)
+
+    if not experiment_dirs:
+        print(f"[ERROR] No subfolder with a '.out' file found under {root}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"[Batch] Found {len(experiment_dirs)} candidate experiment folder(s):")
+    for d in experiment_dirs:
+        print(f"  - {d}")
+
+    results = []
+    skipped = []
+    for i, exp_dir in enumerate(experiment_dirs, start=1):
+        print(f"\n{'#'*70}")
+        print(f"# Batch [{i}/{len(experiment_dirs)}]  {exp_dir}")
+        print(f"{'#'*70}")
+
+        if not (exp_dir / "config.yaml").exists():
+            msg = f"skipped — no config.yaml in {exp_dir}"
+            print(f"[WARNING] {msg}")
+            skipped.append((exp_dir, msg))
+            continue
+
+        info = _find_best_overall_and_activation(exp_dir, activation)
+        _print_candidate("Miglior modello assoluto", info.get("overall"), info.get("overall_error"))
+        _print_candidate(f"Miglior modello ({activation} nativa)", info.get("activation"), info.get("activation_error"))
+
+        results.append({"experiment": exp_dir, **info})
+
+    # ── Batch-wide summary ────────────────────────────────────────────────────
+    print(f"\n{'='*70}")
+    print(f"BATCH SUMMARY  —  {len(results)} esperimenti analizzati, "
+          f"{len(skipped)} saltati (su {len(experiment_dirs)} totali)  —  attivazione target: {activation}")
+    print(f"{'='*70}")
+    for r in results:
+        overall = r.get("overall")
+        native = r.get("activation")
+        overall_str = (f"{overall['metric_name']}={overall['metric_value']:.4f}"
+                        if overall else "n/d")
+        native_str = (f"{native['metric_name']}={native['metric_value']:.4f}"
+                      if native else "n/d")
+        print(f"  {r['experiment']}  —  assoluto: {overall_str}  |  {activation}: {native_str}")
+    for d, msg in skipped:
+        print(f"  [SKIPPED] {d}  ->  {msg}")
+    print(f"{'='*70}\n")
+
+    print("Esperimento con lo score/accuracy migliore, per categoria:")
+    _print_batch_best_group(results, "overall", "Miglior modello assoluto")
+    _print_batch_best_group(results, "activation", f"Miglior modello ({activation} nativa)")
+    print()
+
+    if skipped and not results:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

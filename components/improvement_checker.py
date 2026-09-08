@@ -25,7 +25,7 @@ class ImprovementChecker:
         score_check = True
 
         # if there's a degradation compared to the last training
-        if last_score > score[len(score) - 1]:
+        if last_score >= score[len(score) - 1]:
             score_check = False
         print("[Debug] Improvement Checker - Score check result: ", score_check)
         return score_check

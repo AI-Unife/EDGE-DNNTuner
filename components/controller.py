@@ -42,7 +42,7 @@ class controller:
         # Internal counters
         self.count_new_fc = 0
         self.count_new_cv = 0
-        self.max_fc = 8
+        self.max_fc = 15
         self.start_conv = 2
         self.max_conv = self.count_max_conv(base_blocks=self.start_conv)
         self.count_no_probs = 0
@@ -129,7 +129,7 @@ class controller:
         self.nn.residual = residual
 
     def set_reg_l2(self, reg: bool) -> None:
-        """Enable/disable data augmentation for the next training call."""
+        """Enable/disable L2 regularization for the next training call."""
         self.reg = reg
         self.nn.reg = reg
 
@@ -210,18 +210,6 @@ class controller:
             smoothed.append(smoothed_val)
             last = smoothed_val
         return smoothed
-
-    def manage_configuration(self) -> None:
-        """
-        If present, invoke the energy module to select a better runtime configuration.
-        """
-        energy_name = "energy_module"
-        if energy_name in self.modules.modules_name:
-            index = self.modules.modules_name.index(energy_name)
-            try:
-                self.modules.modules_obj[index].fix_configuration()
-            except Exception as e:  # robust to module-specific issues
-                print("[ERROR]Energy module failed to fix configuration: %s", e)
                 
                 
     # ------------------------------ Training ---------------------------------

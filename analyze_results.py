@@ -51,7 +51,7 @@ class ExperimentResult:
     hw_config: Optional[str]
     score: Optional[float]
     w_flops: Optional[float] = None
-    # hyperparams: Optional[Dict[str, Any]]
+    hyperparams: Optional[Dict[str, Any]] = None
     score: Optional[float] = None  # Calculated as -accuracy if no modules are present
 
 
@@ -116,13 +116,13 @@ class ResultsAnalyzer:
         # Combine the data
         max_iterations = max(
             len(accuracies),
-            # len(hyperparams_list),
+            len(hyperparams_list),
             len(flops_data) if flops_data else 0,
             len(hw_data) if hw_data else 0
         )
         dataset_name = self.config.get("dataset", "unknown")
         dataset = TunerDataset()
-        if COMPUTE_FLOPS and flops_data is None:
+        if COMPUTE_FLOPS:
             if dataset_name == "cifar10":
                 dataset.load_cifar_10()
             elif dataset_name == "cifar100":
@@ -147,7 +147,7 @@ class ResultsAnalyzer:
                 exit(1)
 
         for i in range(max_iterations):
-            if COMPUTE_FLOPS and (flops_data is None or flops_data[i][1] is None):
+            if COMPUTE_FLOPS and (flops_data is None or len(flops_data[i]) == 1):
                 flops, nparams = _compute_net_flops(hyperparams_list[i], dataset)
                 flops_data[i] = (nparams, flops)
                 print(f"  Iteration {i+1}: FLOPS recalculated from hyperparameters: {flops if flops is not None else 'N/A'}, Nparams: {nparams if nparams is not None else 'N/A'}")
@@ -162,7 +162,7 @@ class ResultsAnalyzer:
                 hw_config=hw_data[i][3] if hw_data and i < len(hw_data) else None,
                 score=scores[i] if scores and i < len(scores) else None,
                 w_flops=self.config.get("w_flops") if self.has_flops_module else None,
-                # hyperparams=hyperparams_list[i] if i < len(hyperparams_list) else None,
+                hyperparams=hyperparams_list[i] if i < len(hyperparams_list) else None,
             )
             
             # Calculate score: -accuracy if no modules are present
@@ -221,6 +221,7 @@ class ResultsAnalyzer:
         import re
         iteration_pattern = re.compile(r'START TRAINING ITERATION (\d+)')
         layer_pattern = re.compile(r'layer_x_block=(\d+)')
+        
 
         results = {}
         current_iter = None
@@ -251,51 +252,130 @@ class ResultsAnalyzer:
 
         return str(out_files[0])
     
-    def _load_hyperparams(self) -> List[Optional[Dict[str, Any]]]:
-        """Load hyperparameters from hyper-neural.txt file"""
-        hp_file = self.algorithm_logs_dir / "hyper-neural.txt"
+    
+    def _extract_hyperparams_per_iteration(self, input_file):
+        """
+        Estrae, per ogni iterazione, il dizionario di hyperparametri (dalla riga
+        'Chosen point: {...}' che precede 'START TRAINING ITERATION N') e il
+        relativo layer_x_block (dalla riga 'Building model ... layer_x_block=N'
+        che segue).
+        """
+        import re
         import ast
-        if not hp_file.exists():
-            print(f"  hyper-neural.txt file not found in {self.algorithm_logs_dir}")
-            return []
 
-        try:
-            layers_map = self._extract_layers_per_iteration(self._get_out_file())
+        iteration_pattern = re.compile(r'START TRAINING ITERATION (\d+)')
+        layer_pattern = re.compile(r'layer_x_block=(\d+)')
+        chosen_point_pattern = re.compile(r'Chosen point:\s*(\{.*\})')
 
-            hyperparams = []
-            current_iter = 0
+        results = {}
+        current_iter = None
+        pending_hp = None  # hyperparams letti ma non ancora assegnati a un'iterazione
 
-            with open(hp_file, 'r') as f:
-                for line in f:
-                    line = line.strip()
-
-                    if not line:
-                        hyperparams.append(None)
-                        current_iter += 1
-                        continue
-
+        with open(input_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                # 1) riga con gli hyperparametri, arriva PRIMA dello start iteration
+                cp_match = chosen_point_pattern.search(line)
+                if cp_match:
                     try:
-                        hp_dict = ast.literal_eval(line)
-
-                        # ✅ aggiungi layer_x_block
-                        layer = layers_map.get(current_iter, None)
-
-                        if hp_dict is not None:
-                            hp_dict["layer_x_block"] = layer
-
-                        hyperparams.append(hp_dict)
-
+                        pending_hp = ast.literal_eval(cp_match.group(1))
                     except Exception as e:
-                        print(f"  Error parsing hyperparameters: {e}")
-                        hyperparams.append(None)
+                        print(f"  Error parsing 'Chosen point' line: {e}")
+                        pending_hp = None
+                    continue
 
-                    current_iter += 1
+                # 2) inizio nuova iterazione: assegna gli hyperparametri in sospeso
+                iter_match = iteration_pattern.search(line)
+                if iter_match:
+                    current_iter = int(iter_match.group(1))
+                    if pending_hp is not None:
+                        results[current_iter] = dict(pending_hp)
+                        pending_hp = None
+                    continue
 
+                # 3) layer_x_block della stessa iterazione (prende sempre l'ULTIMO)
+                if current_iter is not None:
+                    layer_match = layer_pattern.search(line)
+                    if layer_match:
+                        results.setdefault(current_iter, {})
+                        results[current_iter]['layer_x_block'] = int(layer_match.group(1))
+
+        return results
+
+
+    def _get_out_file(self):
+        out_files = list(Path(self.experiment_dir).glob("*.out"))
+
+        if len(out_files) == 0:
+            raise FileNotFoundError("Nessun file .out trovato in {}".format(self.experiment_dir))
+        elif len(out_files) > 1:
+            raise ValueError(f"Più file .out trovati: {out_files}")
+
+        return str(out_files[0])
+
+
+    def _load_hyperparams(self) -> List[Optional[Dict[str, Any]]]:
+        """Load hyperparameters directly from the .out file (righe 'Chosen point:' + layer_x_block)"""
+        try:
+            out_file = self._get_out_file()
+            hp_map = self._extract_hyperparams_per_iteration(out_file)
         except Exception as e:
-            print(f"  Error reading {hp_file}: {e}")
+            print(f"  Error reading hyperparameters from .out file: {e}")
             return []
-        
+
+        if not hp_map:
+            print(f"  Nessun hyperparametro trovato nel file .out")
+            return []
+
+        max_iter = max(hp_map.keys())
+        hyperparams = [hp_map.get(i) for i in range(max_iter + 1)]
+
         return hyperparams
+    
+    # def _load_hyperparams(self) -> List[Optional[Dict[str, Any]]]:
+    #     """Load hyperparameters from hyper-neural.txt file"""
+    #     hp_file = self.algorithm_logs_dir / "hyper-neural.txt"
+    #     import ast
+    #     if not hp_file.exists():
+    #         print(f"  hyper-neural.txt file not found in {self.algorithm_logs_dir}")
+    #         return []
+
+    #     try:
+    #         layers_map = self._extract_layers_per_iteration(self._get_out_file())
+
+    #         hyperparams = []
+    #         current_iter = 0
+
+    #         with open(hp_file, 'r') as f:
+    #             for line in f:
+    #                 line = line.strip()
+
+    #                 if not line:
+    #                     hyperparams.append(None)
+    #                     current_iter += 1
+    #                     continue
+
+    #                 try:
+    #                     hp_dict = ast.literal_eval(line)
+
+    #                     # ✅ aggiungi layer_x_block
+    #                     layer = layers_map.get(current_iter, None)
+
+    #                     if hp_dict is not None:
+    #                         hp_dict["layer_x_block"] = layer
+
+    #                     hyperparams.append(hp_dict)
+
+    #                 except Exception as e:
+    #                     print(f"  Error parsing hyperparameters: {e}")
+    #                     hyperparams.append(None)
+
+    #                 current_iter += 1
+
+    #     except Exception as e:
+    #         print(f"  Error reading {hp_file}: {e}")
+    #         return []
+        
+    #     return hyperparams
     
     def _load_flops_data(self) -> Optional[List[Tuple[float, float]]]:
         """Load FLOPS data from flops_report.txt file"""
@@ -368,11 +448,13 @@ class ResultsAnalyzer:
             self.config = {}
 
     def get_best_result(self) -> Optional[ExperimentResult]:
-        """Return the best result (lowest score)"""
-        valid_results = [r for r in self.results if r.score is not None]
+        """Return the best result (highest accuracy)"""
+        valid_results = [r for r in self.results if r.accuracy is not None and r.hyperparams['activation'] in ['relu', 'selu'] and r.nparams is not None and r.nparams <= 300000]
+        # print(f"  Found {len(valid_results)} valid results with accuracy and hyperparams")
+        # print(f"  Valid results: {[r for r in valid_results]}")
         if not valid_results:
             return None
-        return min(valid_results, key=lambda r: r.score)
+        return max(valid_results, key=lambda r: r.accuracy if r.accuracy is not None else float('-inf'))  # Best accuracy
     
     def save_experiment_csv(self, output_csv: Path) -> bool:
         """
@@ -399,9 +481,9 @@ class ResultsAnalyzer:
                 
                 # Add fields for hyperparameters
                 all_hp_keys = set()
-                # for result in self.results:
-                #     if result.hyperparams:
-                #         all_hp_keys.update(result.hyperparams.keys())
+                for result in self.results:
+                    if result.hyperparams:
+                        all_hp_keys.update(result.hyperparams.keys())
                 
                 fieldnames.extend(sorted(all_hp_keys))
                 
@@ -427,9 +509,9 @@ class ResultsAnalyzer:
                     }
                     
                     # Add hyperparameters
-                    # if result.hyperparams:
-                    #     for key in all_hp_keys:
-                    #         row[key] = result.hyperparams.get(key, '')
+                    if result.hyperparams:
+                        for key in all_hp_keys:
+                            row[key] = result.hyperparams.get(key, '')
                     
                     # Add data from config.yaml
                     for key, value in self.config.items():

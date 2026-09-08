@@ -1,8 +1,15 @@
 import numpy as np
+import tensorflow as tf
 from tensorflow.keras import layers, models
 from components.backend_interface import BackendInterface
 
 class ModuleBackend(BackendInterface):
+    def __init__(self):
+        super().__init__()
+        self.name = "tensorflow"
+        # gpus = tf.config.list_physical_devices('GPU')
+        # for gpu in gpus:
+        #     tf.config.experimental.set_memory_growth(gpu, True)
 
     def get_layers(self, model):
         return model.layers

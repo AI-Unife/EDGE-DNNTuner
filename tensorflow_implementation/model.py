@@ -57,12 +57,12 @@ class TFModel(TunerModel):
         self.n_classes = n_classes
         self.is_roi = is_roi
         self.pos_input_shape = pos_input_shape
-        self.residual = params.get("skip_connection", False)
+        self.residual = False # params.get("skip_connection", False)
         self.reg = params.get("reg_l2", False)
         self.da = params.get("data_augmentation", False)
 
         print(f"\n\n{self.cfg.dataset.lower()}\n\n")
-        batch = True if "tiny" in self.cfg.dataset.lower() or "cim" in self.cfg.dataset.lower() else False  # self.reg if self.reg else None
+        batch = True if "tiny" in self.cfg.dataset.lower() or "cima" in self.cfg.dataset.lower() else False  # self.reg if self.reg else None
         self.model = None
         # 2) Build a new CNN
 
@@ -72,17 +72,18 @@ class TFModel(TunerModel):
         if self.da:
             inputs = tf.keras.layers.RandomFlip("horizontal")(inputs)
             inputs = tf.keras.layers.RandomTranslation(height_factor=0.1, width_factor=0.1, fill_mode="nearest")(inputs)
-
-        x = Conv2D(params["unit_c1"] * params['num_neurons'], (3, 3), padding="same")(inputs)
+        
+        stride = 2 if "bean" in self.cfg.dataset.lower() else 1
+        x = Conv2D(params["unit_c1"] * params['num_neurons'], (3, 3), padding="same", strides=stride)(inputs)
         x = Activation(params["activation"])(x)
         x = BatchNormalization()(x) if batch else x
         for _ in range(1, layer_x_block-1):
-            x = Conv2D(params["unit_c1"] * params['num_neurons'], (3, 3), padding="same")(x)
+            x = Conv2D(params["unit_c1"] * params['num_neurons'], (3, 3), padding="same" )(x)
             x = Activation(params["activation"])(x)
             x = BatchNormalization()(x) if batch else x
         if self.residual:
             x = Conv2D(params["unit_c1"] * params['num_neurons'] , (3, 3), padding="same")(x)
-            x = self._add_residual(inputs, x, params['unit_c1'] * params['num_neurons'], params['activation'], reg_layer)
+            x = self._add_residual(inputs, x, params['unit_c1'] * params['num_neurons'], params['activation'], reg_layer, stride=stride)
         else:
             x = Conv2D(params["unit_c1"] * params['num_neurons'], (3, 3), padding="same", kernel_regularizer=reg_layer)(x)
             x = Activation(params["activation"])(x)
@@ -126,7 +127,7 @@ class TFModel(TunerModel):
             # x = Dropout(params["dr_f"])(x)
             x = MaxPooling2D(pool_size=(2, 2))(x)
 
-        x = GlobalAveragePooling2D()(x) # if batch else Flatten()(x)
+        x = GlobalAveragePooling2D()(x) if batch else Flatten()(x)
         
         # If ROI dataset, concatenate flattened pos with x
         pos_input = None
@@ -160,14 +161,10 @@ class TFModel(TunerModel):
         self.create_specs()
    
    
-    def _add_residual(self, shortcut, x, output_channels, activation, reg_layer):
-        # If input and output channel dimensions differ, align them via 1x1 conv
-        if shortcut.shape[-1] != output_channels:
-            shortcut = Conv2D(output_channels, (1, 1), padding="same", kernel_regularizer=reg_layer)(shortcut)
-        # Add skip connection
+    def _add_residual(self, shortcut, x, output_channels, activation, reg_layer, stride=1):
+        if shortcut.shape[-1] != output_channels or stride != 1:
+            shortcut = Conv2D(output_channels, (1, 1), strides=stride, padding="same", kernel_regularizer=reg_layer)(shortcut)
         x = Add()([shortcut, x])
-        # Apply activation after addition (ResNet-style)
-    
         x = Activation(activation)(x)
         return x
     
