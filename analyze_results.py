@@ -35,7 +35,7 @@ import nvdla.profiler as profiler
 from components.model_interface import LayerSpec, LayerTypes, Params
 from components.dataset import TunerDataset
 _EXCLUDED_CONFIG_KEYS = ["name", "verbose", "polarity", "created_at"]
-COMPUTE_FLOPS = True
+COMPUTE_FLOPS = False
 COMPUTE_HW = False
 
 @dataclass
