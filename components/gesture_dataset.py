@@ -260,7 +260,7 @@ def reshape_x_pos(arr: np.ndarray, pos: Optional[np.ndarray], cfg) -> Tuple[np.n
         # print(f"Reshaping for depth mode: output shape {arr.shape}, pos shape {pos.shape if pos is not None else None}")
         return arr, pos
 
-def dataset_to_numpy(dataset, cfg) -> Tuple[np.ndarray, np.ndarray]:
+def dataset_to_numpy(dataset, cfg, ragged: bool = True) -> Tuple[np.ndarray, np.ndarray]:
     """
     Convert a (cached) tonic dataset into NumPy arrays (or object array for ROI) with the layout expected by the model.
 
@@ -270,19 +270,38 @@ def dataset_to_numpy(dataset, cfg) -> Tuple[np.ndarray, np.ndarray]:
       - "depth":      single frame with possibly combined polarity -> [B, H, W, C]
     For ROI datasets, each element of X is a dict {"data": <array>, "pos": <array>} and the returned X
     is an object array with shape (N,). For non-ROI, X is a numeric array.
-    Targets (y):
-      - "fwdPass"/"hybrid": [B, T, C] (time-repeated one-hot via ToOneHotTimeCoding)
-      - "depth":            integer labels; one-hot added later in gesture_data()
+
+    ``ragged`` selects the fwdPass label/length convention:
+      - ragged=True  (fixed-Δt framing): each recording keeps its own number of
+        frames T_i and y is one integer label per recording ([B]); the [T_i, C]
+        one-hot is materialised later, per sample, by the frame-by-frame evaluator.
+      - ragged=False (fixed number of frames): every recording has T == cfg.frames
+        and y is the time-repeated one-hot [T, C] produced by the target_transform
+        (old training convention).
+    For hybrid/depth ``ragged`` is ignored (labels handled as before).
     """
     x_list, y_list = [], []
 
-    for x, y in dataset:
+    n_total = len(dataset)
+    n_skipped = 0
+    for i in range(n_total):
+        try:
+            x, y = dataset[i]
+        except Exception as exc:  # unreadable / corrupted recording -> skip, don't abort
+            n_skipped += 1
+            print(f"[dataset_to_numpy] skip sample {i}/{n_total}: {type(exc).__name__}: {exc}")
+            continue
         # Handle ROI items (dicts with 'data' and 'pos')
         if isinstance(x, dict) or (hasattr(cfg, "dataset") and "roi" in cfg.dataset.lower()):
             events = x["data"]
             pos = x.get("pos", None)
             arr = np.array(events)
             x_reshaped, pos = reshape_x_pos(arr, np.array(pos) if pos is not None else None, cfg)
+            if cfg.mode == "fwdPass" and ragged and pos is not None:
+                # data and ROI-map are framed by two independent ToFrame passes and
+                # can differ by a frame -> keep only their common leading length.
+                T = min(x_reshaped.shape[0], pos.shape[0])
+                x_reshaped, pos = x_reshaped[:T], pos[:T]
             if cfg.dataset == "roigesture_coords":
                 pos_mean = None
                 if pos is not None:
@@ -356,7 +375,18 @@ def dataset_to_numpy(dataset, cfg) -> Tuple[np.ndarray, np.ndarray]:
             x_reshaped, _ = reshape_x_pos(arr, None, cfg)
             x_list.append(x_reshaped)
 
-        y_list.append(np.array(y))
+        if cfg.mode == "fwdPass" and ragged:
+            # One label per recording; the [T_i, C] one-hot is materialised later,
+            # per sample, once T_i is known (frame-by-frame forward pass).
+            y_list.append(int(np.asarray(y)))
+        else:
+            # fixed frames -> time-repeated one-hot from the target_transform,
+            # or hybrid/depth label as produced upstream.
+            y_list.append(np.array(y))
+
+    if n_skipped:
+        print(f"[dataset_to_numpy] {n_skipped}/{n_total} samples skipped (unreadable); "
+              f"{len(x_list)} kept.")
 
     # Return X as object array so that elements can be dicts (ROI) or arrays; y as numeric array
     return np.array(x_list, dtype=object), np.array(y_list)
@@ -393,110 +423,147 @@ def _ensure_cache_dir(cache_dir: str) -> None:
     Path(cache_dir, "train").mkdir(parents=True, exist_ok=True)
     Path(cache_dir, "test").mkdir(parents=True, exist_ok=True)
 
-def get_datasets_numpy(cfg):
+_EMPTY = (np.array([], dtype=object), np.array([]))
+
+
+def get_datasets_numpy(cfg, test_only: bool = False):
     """
     Load DVSGesture through Tonic, apply transforms, and return NumPy arrays.
+
+    Args:
+        test_only: if True, only the test split is built/converted; the train
+                   split is returned empty (saves time when just evaluating).
 
     Returns:
         ((x_train, y_train), (x_test, y_test))
     """
     dataset_path = './data/'
-    cache_dir = f"./cache/DVSGesture_{cfg.mode}_{cfg.frames}_{cfg.channels}/"
+    # train split framed with cfg.frames, test split with cfg.delta_t (fwdPass).
+    cache_dir = f"./cache/DVSGesture_{cfg.mode}_tr{cfg.frames}_te{cfg.delta_t}_{cfg.channels}/"
     # resolve with fallback
     dataset_path, cache_dir = _resolve_paths(dataset_path, cache_dir)
     _ensure_cache_dir(cache_dir)
     print("dataset_path:", dataset_path)
     print("cache_dir:", cache_dir)
 
-    # Base framing to [T, 2, H, W] with H=W=64
-    tfms: List = [
-        transforms.Denoise(filter_time=10000),
-        transforms.Downsample(sensor_size=tonic.datasets.DVSGesture.sensor_size, target_size=(64, 64)),
-        transforms.ToFrame(sensor_size=(64, 64, 2), time_window=10000, )# n_time_bins=cfg.frames),
-    ]
+    # fwdPass: TRAIN uses a fixed number of frames (old convention), TEST uses a
+    # fixed time window Δt (variable length + per-recording majority vote).
+    # hybrid/depth: same framing for both splits (unchanged).
+    def _split_pipeline(split_ragged: bool):
+        tfms: List = [
+            transforms.Denoise(filter_time=10000),
+            transforms.Downsample(sensor_size=tonic.datasets.DVSGesture.sensor_size, target_size=(64, 64)),
+        ]
+        if cfg.mode == "fwdPass":
+            if split_ragged:
+                tfms.append(transforms.ToFrame(sensor_size=(64, 64, 2), time_window=cfg.delta_t))
+                target_transform = None
+            else:
+                tfms.append(transforms.ToFrame(sensor_size=(64, 64, 2), n_time_bins=cfg.frames))
+                target_transform = ToOneHotTimeCoding(n_classes=11, n_frames=cfg.frames)
+        elif cfg.mode == "hybrid":
+            tfms.append(transforms.ToFrame(sensor_size=(64, 64, 2), time_window=10000))
+            target_transform = ToOneHotTimeCoding(n_classes=11, n_frames=cfg.frames // cfg.channels)
+        else:
+            tfms.append(transforms.ToFrame(sensor_size=(64, 64, 2), time_window=10000))
+            tfms.append(BothPolarity())
+            target_transform = None
+        return transforms.Compose(tfms), target_transform
 
-    # Labels repeated across time if the model expects temporal supervision
-    if cfg.mode == "fwdPass":
-        target_transform = ToOneHotTimeCoding(n_classes=11, n_frames=cfg.frames)
-    elif cfg.mode == "hybrid":
-        target_transform = ToOneHotTimeCoding(n_classes=11, n_frames=cfg.frames // cfg.channels)
-    else:
-        # For single-frame modes, optionally apply a polarity transform to images
-        tfms.append(BothPolarity())
-        target_transform = None
-
-    transform = transforms.Compose(tfms)
-
-    train = tonic.datasets.DVSGesture(
-        save_to=dataset_path, transform=transform, target_transform=target_transform, train=True
-    )
+    test_ragged = (cfg.mode == "fwdPass")
+    test_tf, test_target_tf = _split_pipeline(split_ragged=test_ragged)
     test = tonic.datasets.DVSGesture(
-        save_to=dataset_path, transform=transform, target_transform=target_transform, train=False
+        save_to=dataset_path, transform=test_tf, target_transform=test_target_tf, train=False
     )
-
-    cached_train = tonic.DiskCachedDataset(train, cache_path=os.path.join(cache_dir, "train"))
     cached_test = tonic.DiskCachedDataset(test, cache_path=os.path.join(cache_dir, "test"))
+    x_test, y_test = dataset_to_numpy(cached_test, cfg, ragged=test_ragged)
 
-    x_train, y_train = dataset_to_numpy(cached_train, cfg)
-    x_test, y_test = dataset_to_numpy(cached_test, cfg)
+    if test_only:
+        return _EMPTY, (x_test, y_test)
+
+    train_tf, train_target_tf = _split_pipeline(split_ragged=False)
+    train = tonic.datasets.DVSGesture(
+        save_to=dataset_path, transform=train_tf, target_transform=train_target_tf, train=True
+    )
+    cached_train = tonic.DiskCachedDataset(train, cache_path=os.path.join(cache_dir, "train"))
+    x_train, y_train = dataset_to_numpy(cached_train, cfg, ragged=False)
 
     return (x_train, y_train), (x_test, y_test)
 
 
-def get_ROI_numpy(cfg, frame_size: int = 32) -> Tuple[Tuple[np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray]]:
+def get_ROI_numpy(cfg, frame_size: int = 32, test_only: bool = False) -> Tuple[Tuple[np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray]]:
     """
     Load a folder-structured ROI dataset via ROIDataset and return NumPy arrays.
+
+    Args:
+        test_only: if True, only the test split is built/converted.
 
     Returns:
         ((x_train, y_train), (x_test, y_test))
     """
     dataset_path = "rois_and_coordinates/datasets/"
-    cache_dir = f"./cache/DVS_ROI_{frame_size}_{cfg.mode}_{cfg.frames}_{cfg.channels}/"
+    cache_dir = f"./cache/DVS_ROI_{frame_size}_{cfg.mode}_tr{cfg.frames}_te{cfg.delta_t}_{cfg.channels}/"
     output_size = (frame_size, frame_size, 2)
     _ensure_cache_dir(cache_dir)
     print("cache_dir:", cache_dir)
 
-    tfms: List = [
-        transforms.Denoise(filter_time=10000),
-        # Downsample and ToFrame expect 2D spatial sizes (H, W) only, not including polarity
-        transforms.Downsample(sensor_size=(32, 32), target_size=(frame_size, frame_size)),
-        transforms.ToFrame(sensor_size=(frame_size, frame_size, 2), time_window=10000) # n_time_bins=cfg.frames),
-    ]
+    # fwdPass: TRAIN = fixed number of frames (old convention), TEST = fixed Δt
+    # (variable length). Events and the ROI map use the SAME framing so their
+    # per-recording frame counts line up. hybrid/depth: unchanged.
+    def _split_pipeline(split_ragged: bool):
+        tfms: List = [
+            transforms.Denoise(filter_time=10000),
+            # Downsample and ToFrame expect 2D spatial sizes (H, W) only, not including polarity
+            transforms.Downsample(sensor_size=(32, 32), target_size=(frame_size, frame_size)),
+        ]
+        if cfg.mode == "fwdPass":
+            if split_ragged:
+                tfms.append(transforms.ToFrame(sensor_size=(frame_size, frame_size, 2), time_window=cfg.delta_t))
+                pos_tf = ROIMapTransform(time_window=cfg.delta_t, output_size=(frame_size, frame_size, 1))
+                target_transform = None
+            else:
+                tfms.append(transforms.ToFrame(sensor_size=(frame_size, frame_size, 2), n_time_bins=cfg.frames))
+                pos_tf = ROIMapTransform(n_time_bins=cfg.frames, output_size=(frame_size, frame_size, 1))
+                target_transform = ToOneHotTimeCoding(n_classes=11, n_frames=cfg.frames)
+        elif cfg.mode == "hybrid":
+            tfms.append(transforms.ToFrame(sensor_size=(frame_size, frame_size, 2), time_window=10000))
+            pos_tf = ROIMapTransform(time_window=10000, output_size=(frame_size, frame_size, 1))
+            target_transform = ToOneHotTimeCoding(n_classes=11, n_frames=cfg.frames // cfg.channels)
+        else:
+            tfms.append(transforms.ToFrame(sensor_size=(frame_size, frame_size, 2), time_window=10000))
+            tfms.append(BothPolarity())
+            pos_tf = ROIMapTransform(time_window=10000, output_size=(frame_size, frame_size, 1))
+            target_transform = None
+        return transforms.Compose(tfms), target_transform, pos_tf
 
-    if cfg.mode == "fwdPass":
-        target_transform = ToOneHotTimeCoding(n_classes=11, n_frames=cfg.frames)
-    elif cfg.mode == "hybrid":
-        target_transform = ToOneHotTimeCoding(n_classes=11, n_frames=cfg.frames // cfg.channels)
-    else:
-        tfms.append(BothPolarity())
-        target_transform = None
-
-    transform = transforms.Compose(tfms)
-    
-
-    train =  DVSGestureROI(
-        dataset_path,
-        output_size=output_size,
-        train=True,
-        transform=transform,
-        target_transform=target_transform,
-        position_transform=ROIMapTransform(time_window=10000, output_size=(frame_size, frame_size, 1)),# n_time_bins=cfg.frames
-    )
-    print("Loaded ROI training dataset with", len(train), "samples.")
+    test_ragged = (cfg.mode == "fwdPass")
+    test_tf, test_target_tf, test_pos_tf = _split_pipeline(split_ragged=test_ragged)
     test = DVSGestureROI(
         dataset_path,
         output_size=output_size,
         train=False,
-        transform=transform,
-        target_transform=target_transform,
-        position_transform=ROIMapTransform(time_window=10000, output_size=(frame_size, frame_size, 1)), # n_time_bins=cfg.frames, 
+        transform=test_tf,
+        target_transform=test_target_tf,
+        position_transform=test_pos_tf,
     )
-
-    cached_train = tonic.DiskCachedDataset(train, cache_path=os.path.join(cache_dir, "train"))
     cached_test = tonic.DiskCachedDataset(test, cache_path=os.path.join(cache_dir, "test"))
+    x_test, y_test = dataset_to_numpy(cached_test, cfg, ragged=test_ragged)
 
-    x_train, y_train = dataset_to_numpy(cached_train, cfg) 
-    x_test, y_test = dataset_to_numpy(cached_test, cfg)
+    if test_only:
+        return _EMPTY, (x_test, y_test)
+
+    train_tf, train_target_tf, train_pos_tf = _split_pipeline(split_ragged=False)
+    train = DVSGestureROI(
+        dataset_path,
+        output_size=output_size,
+        train=True,
+        transform=train_tf,
+        target_transform=train_target_tf,
+        position_transform=train_pos_tf,
+    )
+    print("Loaded ROI training dataset with", len(train), "samples.")
+    cached_train = tonic.DiskCachedDataset(train, cache_path=os.path.join(cache_dir, "train"))
+    x_train, y_train = dataset_to_numpy(cached_train, cfg, ragged=False)
 
     return (x_train, y_train), (x_test, y_test)
 
@@ -508,9 +575,11 @@ def ROI_data():
     return gesture_data(ROI=True)
 
 
-def gesture_data(num_classes: int = 11, ROI: bool = False, frame_size: int = 32):
+def gesture_data(num_classes: int = 11, ROI: bool = False, frame_size: int = 32, test_only: bool = False):
     """
     End-to-end loader producing NumPy arrays ready for model consumption.
+
+    ``test_only=True`` skips building the train split (returns it empty).
 
     Shapes:
       - fwdPass:
@@ -528,13 +597,14 @@ def gesture_data(num_classes: int = 11, ROI: bool = False, frame_size: int = 32)
     """
     cfg = load_cfg()
     if ROI:
-        (x_train, y_train), (x_test, y_test) = get_ROI_numpy(cfg=cfg, frame_size=frame_size)
+        (x_train, y_train), (x_test, y_test) = get_ROI_numpy(cfg=cfg, frame_size=frame_size, test_only=test_only)
     else:
-        (x_train, y_train), (x_test, y_test) = get_datasets_numpy(cfg=cfg)
+        (x_train, y_train), (x_test, y_test) = get_datasets_numpy(cfg=cfg, test_only=test_only)
 
     # Convert labels to one-hot for single-frame modes
     if cfg.mode == "depth":
-        y_train = tf.keras.utils.to_categorical(y_train, num_classes)
+        if len(y_train):
+            y_train = tf.keras.utils.to_categorical(y_train, num_classes)
         y_test = tf.keras.utils.to_categorical(y_test, num_classes)
 
 

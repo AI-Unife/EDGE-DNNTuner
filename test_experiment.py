@@ -40,6 +40,24 @@ interactively if not passed on the command line). The TARGET activation
                             inference time, and only evaluate it (no
                             retraining).
 
+  auto_activation_infer    No --activation needed. Compare the best LOGGED
+                            accuracy of the relu iterations vs the selu ones,
+                            pick the winner automatically, then evaluate
+                            Model/best-model.keras on the TEST SET ONLY (no
+                            retraining). For gesture / roigesture_* the test
+                            split is framed with the config's delta_t.
+                            best-model.keras is evaluated as-is; pass
+                            --force-winner-activation to patch it to the winner
+                            when they differ. Optional: --delta-t <us>.
+
+  auto_activation_retrain  No --activation needed and NO saved model needed.
+                            Same relu-vs-selu choice by logged accuracy, then
+                            REBUILD that iteration's architecture from the logs
+                            (hyper-neural.txt + layer_x_block), retrain it from
+                            scratch and test it. gesture / roigesture_* use the
+                            config's delta_t. Optional: --delta-t <us>,
+                            --epochs, --backend.
+
 Steps (applied to each experiment directory):
   1) Load  the dataset described in the experiment's config.yaml
   2) Find  the best iteration (subject to the chosen selection-mode policy)
@@ -61,7 +79,13 @@ import sys
 from pathlib import Path
 
 
-SELECTION_MODES = ("native_activation", "force_activation_retrain", "force_activation_infer")
+SELECTION_MODES = (
+    "native_activation",
+    "force_activation_retrain",
+    "force_activation_infer",
+    "auto_activation_infer",
+    "auto_activation_retrain",
+)
 SUPPORTED_ACTIVATIONS = ("relu", "selu")
 
 SELECTION_MODE_PROMPTS = {
@@ -74,6 +98,14 @@ SELECTION_MODE_PROMPTS = {
     "3": ("force_activation_infer",
           "Prendi il modello migliore in assoluto, imposta l'attivazione "
           "scelta e fai SOLO inferenza (nessun riaddestramento)."),
+    "4": ("auto_activation_infer",
+          "Confronta l'accuratezza (dai log) del miglior modello relu e del "
+          "miglior modello selu, scegli automaticamente il vincitore e "
+          "valuta best-model.keras sul SOLO test set (nessun riaddestramento)."),
+    "5": ("auto_activation_retrain",
+          "Come la 4 per la scelta relu/selu, ma RICOSTRUISCE l'architettura "
+          "vincente dai log, la riaddestra da zero e la testa (non serve "
+          "best-model.keras)."),
 }
 
 
@@ -83,7 +115,7 @@ def _prompt_selection_mode() -> str:
     for key, (_, desc) in SELECTION_MODE_PROMPTS.items():
         print(f"  {key}) {desc}")
     while True:
-        choice = input("Scelta [1/2/3]: ").strip()
+        choice = input("Scelta [1/2/3/4/5]: ").strip()
         if choice in SELECTION_MODE_PROMPTS:
             mode = SELECTION_MODE_PROMPTS[choice][0]
             print(f"[Selection mode] '{mode}' selezionato.\n")
@@ -154,8 +186,12 @@ def _detect_roi_frame_size(experiment: Path, saved_model=None) -> int:
     return 32
 
 
-def _load_dataset(dataset_name: str, frame_size: int = 32):
-    """Instantiate and load the correct TunerDataset for the given dataset name."""
+def _load_dataset(dataset_name: str, frame_size: int = 32, test_only: bool = False):
+    """Instantiate and load the correct TunerDataset for the given dataset name.
+
+    ``test_only`` is honoured only for the DVSGesture datasets (gesture /
+    roigesture_*); the other loaders always build their full split.
+    """
     from components.dataset import TunerDataset
 
     ds = TunerDataset()
@@ -170,9 +206,9 @@ def _load_dataset(dataset_name: str, frame_size: int = 32):
     elif name in ("cifar10_light", "light_cifar", "light"):
         ds.load_light_cifar()
     elif name == "gesture":
-        ds.load_gesture()
+        ds.load_gesture(test_only=test_only)
     elif "roigesture" in name:
-        ds.load_roi_gesture(frame_size=frame_size)
+        ds.load_roi_gesture(frame_size=frame_size, test_only=test_only)
     elif name == "tinyimagenet":
         ds.load_tiny_imagenet()
     elif name == "cca":
@@ -193,6 +229,7 @@ def _load_dataset(dataset_name: str, frame_size: int = 32):
 def _parse_best_from_out(
     experiment: Path,
     require_activation: "str | None" = None,
+    rank_by: str = "auto",
 ) -> "tuple[dict, int, int, float, float] | None":
     """
     Parse a SLURM .out log and extract the best iteration's hyperparameters,
@@ -213,6 +250,9 @@ def _parse_best_from_out(
     whose original hyperparameters already used that activation are
     considered candidates (this implements the 'native_activation' selection
     mode). If ``require_activation`` is None, no activation filter is applied.
+
+    ``rank_by`` forces the ranking metric: 'acc' always maximises ACCURACY,
+    'auto' (default) prefers SCORE when available.
 
     Search order: experiment directory first, then current working directory.
 
@@ -264,8 +304,9 @@ def _parse_best_from_out(
             if not iterations:
                 continue
 
-            # Rank: prefer SCORE (lower = better), fall back to ACCURACY (higher = better)
-            has_score = any(it["score"] is not None for it in iterations)
+            # Rank: prefer SCORE (lower = better), fall back to ACCURACY (higher = better).
+            # rank_by='acc' forces accuracy ranking regardless of SCORE availability.
+            has_score = (rank_by != "acc") and any(it["score"] is not None for it in iterations)
             valid = [
                 it for it in iterations
                 if (require_activation is None or it["params"].get("activation") == require_activation)
@@ -297,7 +338,7 @@ def _parse_best_from_out(
 
 
 def _find_best_iteration_fallback(
-    algo_logs: Path, require_activation: "str | None" = None
+    algo_logs: Path, require_activation: "str | None" = None, prefer_acc: bool = False
 ) -> "tuple[int, dict, str, float]":
     """
     Fallback selection (used when no .out file is available): rank iterations
@@ -328,7 +369,11 @@ def _find_best_iteration_fallback(
     score_path = algo_logs / "score_report.txt"
     acc_path = algo_logs / "acc_report.txt"
 
-    if score_path.exists():
+    if prefer_acc and acc_path.exists():
+        raw_lines = acc_path.read_text().splitlines()
+        use_score = False
+        source_name = "acc_report.txt"
+    elif score_path.exists():
         raw_lines = score_path.read_text().splitlines()
         use_score = True
         source_name = "score_report.txt"
@@ -529,6 +574,18 @@ def _force_activation(model, activation: str) -> None:
     print(f"[Force {activation}] Patched activation on {changed} layer(s) of the saved model.")
 
 
+def _model_activation(model) -> "str | None":
+    """Best-effort read of a saved model's hidden activation ('relu'/'selu'/...)."""
+    from collections import Counter
+    names = Counter()
+    for layer in model.layers:
+        act = getattr(layer, "activation", None)
+        name = getattr(act, "__name__", None)
+        if name and name not in ("linear", "softmax", "sigmoid"):
+            names[name] += 1
+    return names.most_common(1)[0][0] if names else None
+
+
 def _eval_keras_model(model, dataset, cfg) -> tuple[float, float]:
     """
     Evaluate a Keras model loaded from disk against the test split.
@@ -541,15 +598,18 @@ def _eval_keras_model(model, dataset, cfg) -> tuple[float, float]:
     Returns:
         (loss, accuracy) as plain Python floats.
     """
+    import numpy as np
     import tensorflow as tf
 
     n_classes = dataset.n_classes
 
-    y_test = dataset.Y_test
+    y_test = np.asarray(dataset.Y_test)
     if y_test.ndim == 1:
         y_test = tf.keras.utils.to_categorical(y_test, n_classes)
 
-    x_test = dataset.X_test.astype("float32")
+    x_test = dataset.X_test
+    if getattr(x_test, "dtype", None) != object:
+        x_test = x_test.astype("float32")
 
     model.compile(loss="categorical_crossentropy", optimizer="adam", metrics=["accuracy"])
 
@@ -589,6 +649,159 @@ def _find_experiment_dirs(root: Path) -> "list[Path]":
     return seen
 
 
+# ---------------------------------------------------------------------------
+# Automatic relu-vs-selu selection (by accuracy, from the training logs)
+# ---------------------------------------------------------------------------
+
+def _best_acc_iteration(experiment: Path, activation: str) -> "dict | None":
+    """
+    Best iteration (by ACCURACY, from the training logs) among those whose
+    hyperparameters natively used ``activation``. Tries the SLURM .out first,
+    then falls back to algorithm_logs/acc_report.txt + hyper-neural.txt.
+
+    Returns {"idx", "acc", "params", "layer_x_block"} or None.
+    """
+    out = _parse_best_from_out(experiment, require_activation=activation, rank_by="acc")
+    if out is not None:
+        params, lxb, idx, acc, _score = out
+        return {"idx": idx, "acc": acc, "params": params, "layer_x_block": lxb}
+
+    try:
+        idx, params, metric_name, metric_value = _find_best_iteration_fallback(
+            experiment / "algorithm_logs", require_activation=activation, prefer_acc=True
+        )
+    except Exception as exc:
+        print(f"[auto] nessun candidato '{activation}': {exc}")
+        return None
+    if metric_name != "acc":
+        print(f"[auto] '{activation}': metrica disponibile '{metric_name}', non accuracy — ignorato.")
+        return None
+    lxb = _find_layer_x_block(experiment, idx)
+    return {"idx": idx, "acc": metric_value, "params": params, "layer_x_block": lxb}
+
+
+def _auto_select_activation(experiment: Path) -> "tuple[str, dict]":
+    """
+    Pick relu vs selu automatically as the activation whose best iteration has
+    the highest logged accuracy.
+
+    Returns (winner_activation, {act: candidate|None}).
+    """
+    cands = {a: _best_acc_iteration(experiment, a) for a in SUPPORTED_ACTIVATIONS}
+    scored = {a: c for a, c in cands.items() if c is not None and c["acc"] is not None}
+    if not scored:
+        raise ValueError(
+            "Impossibile scegliere l'attivazione: nessuna iterazione con accuracy "
+            f"trovata per relu/selu in {experiment}."
+        )
+    winner = max(scored, key=lambda a: scored[a]["acc"])
+    return winner, cands
+
+
+def _run_auto_activation_infer(experiment: Path, args) -> dict:
+    """
+    'auto_activation_infer': choose relu/selu by best logged accuracy, then
+    evaluate Model/best-model.keras on the TEST SET ONLY (no retraining),
+    forcing the winning activation. Works for gesture and roigesture_*.
+    """
+    config_path = experiment / "config.yaml"
+    if not config_path.exists():
+        raise FileNotFoundError(f"config.yaml not found in {experiment}")
+
+    from exp_config import set_active_config, load_cfg, reload_cfg
+    set_active_config(config_path)
+    cfg = load_cfg(force=True)
+
+    # Optional Δt override from the command line.
+    if getattr(args, "delta_t", None) is not None:
+        import yaml
+        with open(config_path, "r") as f:
+            raw = yaml.safe_load(f)
+        cfg["delta_t"] = int(args.delta_t)
+        # with open(config_path, "w") as f:
+        #     yaml.safe_dump(raw, f, sort_keys=False, allow_unicode=True)
+        # cfg = reload_cfg()
+
+    winner, cands = _auto_select_activation(experiment)
+
+    print(f"\n{'='*60}")
+    print(f"Experiment       : {experiment}")
+    print(f"Dataset          : {cfg.dataset}")
+    print(f"Mode             : {cfg.mode}   delta_t: {cfg.delta_t}")
+    print(f"Selection mode   : auto_activation_infer  (test set only)")
+    print(f"{'='*60}")
+    for a in SUPPORTED_ACTIVATIONS:
+        c = cands.get(a)
+        if c is None:
+            print(f"  {a:<4} : nessun candidato con accuracy nei log")
+        else:
+            print(f"  {a:<4} : iter={c['idx']}  acc(log)={c['acc']:.4f}  "
+                  f"layer_x_block={c['layer_x_block']}")
+    print(f"  -> attivazione vincente: '{winner}'")
+    print(f"{'='*60}\n")
+
+    roi_frame_size = 32
+    if "roigesture" in cfg.dataset.lower():
+        roi_frame_size = _detect_roi_frame_size(experiment)
+    print(f"[1] Loading TEST split of '{cfg.dataset}'" +
+          (f" (frame_size={roi_frame_size})" if "roigesture" in cfg.dataset.lower() else "") + "...")
+    dataset = _load_dataset(cfg.dataset, frame_size=roi_frame_size, test_only=True)
+    dataset.data_as_float32()
+    print(f"[1] {len(dataset.X_test)} test samples.")
+
+    keras_model_path = experiment / "Model" / "best-model.keras"
+    if not keras_model_path.exists():
+        raise FileNotFoundError(f"{keras_model_path} not found — nothing to evaluate.")
+    print(f"\n[2] Loading model: {keras_model_path}")
+    from test_utils import load_keras_model
+    saved_model = load_keras_model(str(keras_model_path))
+    native_act = _model_activation(saved_model)
+    print(f"[2] Saved model native activation: {native_act or 'sconosciuta'}")
+    saved_model.summary()
+
+    forced = getattr(args, "force_winner_activation", False)
+    if forced and native_act != winner:
+        print(f"\n[!] best-model.keras è stato addestrato con '{native_act}', "
+              f"non '{winner}'. Con --force-winner-activation forzo '{winner}' "
+              f"sui pesi esistenti: il risultato NON riflette le vere prestazioni "
+              f"del miglior modello '{winner}' (che non è salvato su disco).")
+        _force_activation(saved_model, winner)
+        eval_act = winner
+    else:
+        if native_act != winner:
+            print(f"\n[i] L'attivazione vincente dai log è '{winner}', ma l'unico "
+                  f"modello salvato (best-model.keras) usa '{native_act}'. "
+                  f"Valuto il modello salvato COSÌ COM'È. Usa "
+                  f"--force-winner-activation per forzare '{winner}'.")
+        eval_act = native_act
+
+    print(f"\n[3] Evaluating best-model.keras on the TEST set (activation='{eval_act}')...")
+    loss_val, acc_val = _eval_keras_model(saved_model, dataset, cfg)
+
+    print(f"\n{'='*60}")
+    print(f"SUMMARY  (auto_activation_infer)")
+    for a in SUPPORTED_ACTIVATIONS:
+        c = cands.get(a)
+        print(f"  best {a:<4} (log acc)     : {c['acc']:.4f}" if c else
+              f"  best {a:<4} (log acc)     : n/d")
+    print(f"  Attivazione vincente     : {winner}")
+    print(f"  best-model.keras attiv.   : {native_act or 'sconosciuta'}  "
+          f"(valutato come '{eval_act}')")
+    print(f"  Test set  → loss={loss_val:.4f}  acc={acc_val:.4f}")
+    print(f"{'='*60}\n")
+
+    return {
+        "experiment": experiment,
+        "mode": "auto_activation_infer",
+        "activation": winner,
+        "eval_activation": eval_act,
+        "native_activation": native_act,
+        "candidates": {a: (c["acc"] if c else None) for a, c in cands.items()},
+        "test_loss": loss_val,
+        "test_acc": acc_val,
+    }
+
+
 def run_single_experiment(experiment: Path, args, mode: str, activation: str) -> dict:
     """
     Run the evaluate/retrain pipeline on a single experiment directory,
@@ -608,14 +821,30 @@ def run_single_experiment(experiment: Path, args, mode: str, activation: str) ->
     handle batch failures.
     """
     assert mode in SELECTION_MODES, f"Unknown selection mode: {mode}"
-    assert activation in SUPPORTED_ACTIVATIONS, f"Unsupported activation: {activation}"
-    require_activation = activation if mode == "native_activation" else None
-    do_retrain = mode in ("native_activation", "force_activation_retrain")
-    load_saved_model = mode in ("force_activation_retrain", "force_activation_infer")
+
+    if mode == "auto_activation_infer":
+        # relu/selu chosen by the script (best logged accuracy); test set only.
+        return _run_auto_activation_infer(experiment, args)
 
     config_path = experiment / "config.yaml"
     if not config_path.exists():
         raise FileNotFoundError(f"config.yaml not found in {experiment}")
+
+    # 'auto_activation_retrain': pick relu/selu automatically (best logged
+    # accuracy), then behave like 'native_activation' for that winner.
+    auto_cands = None
+    auto_pick = None
+    if mode == "auto_activation_retrain":
+        activation, auto_cands = _auto_select_activation(experiment)
+        auto_pick = auto_cands[activation]
+        print(f"[auto] attivazione vincente: '{activation}' "
+              f"(acc log={auto_pick['acc']:.4f}, iter={auto_pick['idx']})")
+
+    assert activation in SUPPORTED_ACTIVATIONS, f"Unsupported activation: {activation}"
+    native_like = mode in ("native_activation", "auto_activation_retrain")
+    require_activation = activation if native_like else None
+    do_retrain = mode in ("native_activation", "force_activation_retrain", "auto_activation_retrain")
+    load_saved_model = mode in ("force_activation_retrain", "force_activation_infer")
 
     # ── 0. Activate the experiment config ────────────────────────────────────
     from exp_config import set_active_config, load_cfg, reload_cfg
@@ -623,7 +852,8 @@ def run_single_experiment(experiment: Path, args, mode: str, activation: str) ->
     set_active_config(config_path)
     cfg = load_cfg(force=True)
 
-    if args.epochs is not None or args.backend is not None:
+    _delta_t = getattr(args, "delta_t", None)
+    if args.epochs is not None or args.backend is not None or _delta_t is not None:
         import yaml
 
         with open(config_path, "r") as f:
@@ -632,6 +862,8 @@ def run_single_experiment(experiment: Path, args, mode: str, activation: str) ->
             raw["epochs"] = args.epochs
         if args.backend is not None:
             raw["backend"] = args.backend
+        if _delta_t is not None:
+            raw["delta_t"] = int(_delta_t)
         with open(config_path, "w") as f:
             yaml.safe_dump(raw, f, sort_keys=False, allow_unicode=True)
         cfg = reload_cfg()
@@ -641,6 +873,8 @@ def run_single_experiment(experiment: Path, args, mode: str, activation: str) ->
     print(f"Dataset          : {cfg.dataset}")
     print(f"Backend          : {cfg.backend}")
     print(f"Epochs           : {cfg.epochs}")
+    if cfg.mode == "fwdPass":
+        print(f"delta_t          : {cfg.delta_t}")
     print(f"Selection mode   : {mode}")
     print(f"Target activation: {activation}")
     print(f"Will retrain     : {do_retrain}")
@@ -661,18 +895,25 @@ def run_single_experiment(experiment: Path, args, mode: str, activation: str) ->
     # ── 2. Find the best iteration, subject to the selection-mode policy ─────
     print(f"\n[2] Finding best iteration (selection-mode='{mode}', "
           f"require_activation={require_activation})...")
-    out_result = _parse_best_from_out(experiment, require_activation=require_activation)
-    if out_result is not None:
-        best_params, layer_x_block, best_idx, best_acc, best_score = out_result
+    if mode == "auto_activation_retrain":
+        # Winner already found by accuracy in _auto_select_activation — reuse it.
+        best_params = auto_pick["params"]
+        layer_x_block = auto_pick["layer_x_block"]
+        best_idx = auto_pick["idx"]
+        best_acc, best_score = auto_pick["acc"], None
     else:
-        print("[2] No matching .out file found — falling back to algorithm_logs/")
-        algo_logs = experiment / "algorithm_logs"
-        best_idx, best_params, metric_name, metric_value = _find_best_iteration_fallback(
-            algo_logs, require_activation=require_activation
-        )
-        layer_x_block = _find_layer_x_block(experiment, best_idx)
-        best_acc = metric_value if metric_name == "acc" else None
-        best_score = metric_value if metric_name == "score" else None
+        out_result = _parse_best_from_out(experiment, require_activation=require_activation)
+        if out_result is not None:
+            best_params, layer_x_block, best_idx, best_acc, best_score = out_result
+        else:
+            print("[2] No matching .out file found — falling back to algorithm_logs/")
+            algo_logs = experiment / "algorithm_logs"
+            best_idx, best_params, metric_name, metric_value = _find_best_iteration_fallback(
+                algo_logs, require_activation=require_activation
+            )
+            layer_x_block = _find_layer_x_block(experiment, best_idx)
+            best_acc = metric_value if metric_name == "acc" else None
+            best_score = metric_value if metric_name == "score" else None
     print(f"[2] layer_x_block={layer_x_block}")
 
     best_params = dict(best_params)
@@ -680,7 +921,7 @@ def run_single_experiment(experiment: Path, args, mode: str, activation: str) ->
     if mode == "force_activation_retrain":
         best_params["activation"] = activation
         print(f"[2] Activation forced: '{original_activation}' -> '{activation}' (will be retrained).")
-    elif mode == "native_activation":
+    elif native_like:
         best_params["activation"] = activation  # already this activation by construction; kept explicit
     # force_activation_infer: best_params activation left as originally found; the
     # FORCED activation is applied only to the saved model's layers for inference.
@@ -704,7 +945,7 @@ def run_single_experiment(experiment: Path, args, mode: str, activation: str) ->
             print("[3] Model loaded.")
     else:
         print(
-            "\n[3] Skipped: in 'native_activation' mode the on-disk best-model.keras "
+            f"\n[3] Skipped: in '{mode}' mode the on-disk best-model.keras "
             "corresponds to the OVERALL best iteration, which may differ from "
             "the selected natively-target-activation iteration — so it is not evaluated."
         )
@@ -792,8 +1033,10 @@ def run_single_experiment(experiment: Path, args, mode: str, activation: str) ->
 
     print(f"\n{'='*60}")
     print(f"SUMMARY  (mode='{mode}', activation='{activation}')")
-    if saved_acc is not None:
+    if saved_loss is not None and saved_acc is not None:
         print(f"  Reference (pre-retrain)  →  loss={saved_loss:.4f}  acc={saved_acc:.4f}")
+    elif saved_acc is not None:
+        print(f"  Reference (log accuracy) →  acc={saved_acc:.4f}")
     print(f"  Retrained model          →  loss={retrain_loss:.4f}  acc={retrain_acc:.4f}")
     print(f"  Best iteration           : {best_idx}")
     print(f"  layer_x_block            : {layer_x_block}")
@@ -846,10 +1089,30 @@ def main():
         help=(
             "Target activation function to use for the 'native'/'force' "
             "selection logic: 'relu' or 'selu'. If omitted, you will be "
-            "prompted interactively (only when needed)."
+            "prompted interactively (only when needed). Ignored by "
+            "'auto_activation_infer', which picks it automatically."
+        ),
+    )
+    parser.add_argument(
+        "--delta-t", type=int, default=None, dest="delta_t",
+        help=(
+            "Override delta_t (microseconds per frame) in the experiment's "
+            "config.yaml before (re)training/evaluating. Used by the "
+            "'auto_activation_*' modes and any retrain mode."
+        ),
+    )
+    parser.add_argument(
+        "--force-winner-activation", action="store_true", dest="force_winner_activation",
+        help=(
+            "auto_activation_infer only: if best-model.keras was trained with a "
+            "different activation than the log-accuracy winner, patch its layers "
+            "to the winner before evaluating (weights unchanged; result is only "
+            "indicative)."
         ),
     )
     args = parser.parse_args()
+
+    _AUTO_MODES = ("auto_activation_infer", "auto_activation_retrain")
 
     root = Path(args.experiment).expanduser().resolve()
     if not root.is_dir():
@@ -859,12 +1122,45 @@ def main():
     # ── Single experiment: full pipeline (mode prompt, eval, optional retrain) ──
     if (root / "config.yaml").exists():
         mode = args.selection_mode or _prompt_selection_mode()
-        activation = args.activation or _prompt_activation()
+        # 'auto_activation_*' modes select relu/selu on their own.
+        if mode in _AUTO_MODES:
+            activation = args.activation or SUPPORTED_ACTIVATIONS[0]
+        else:
+            activation = args.activation or _prompt_activation()
         # try:
         run_single_experiment(root, args, mode, activation)
         # except Exception as exc:
         #     print(f"[ERROR] {root}: {exc}", file=sys.stderr)
         #     sys.exit(1)
+        return
+
+    # ── Batch + auto_activation_* : run per experiment (no report-only) ──────
+    if args.selection_mode in _AUTO_MODES:
+        experiment_dirs = [d for d in _find_experiment_dirs(root) if (d / "config.yaml").exists()]
+        if not experiment_dirs:
+            print(f"[ERROR] No experiment (config.yaml + .out) found under {root}", file=sys.stderr)
+            sys.exit(1)
+        rows = []
+        for i, exp_dir in enumerate(experiment_dirs, start=1):
+            print(f"\n{'#'*70}\n# [{i}/{len(experiment_dirs)}]  {exp_dir}\n{'#'*70}")
+            try:
+                if args.selection_mode == "auto_activation_infer":
+                    rows.append(_run_auto_activation_infer(exp_dir, args))
+                else:
+                    rows.append(run_single_experiment(
+                        exp_dir, args, args.selection_mode, SUPPORTED_ACTIVATIONS[0]
+                    ))
+            except Exception as exc:
+                print(f"[ERROR] {exp_dir}: {exc}", file=sys.stderr)
+        print(f"\n{'='*70}\nBATCH SUMMARY ({args.selection_mode})\n{'='*70}")
+        for r in rows:
+            if args.selection_mode == "auto_activation_infer":
+                print(f"  {r['experiment']}  ->  vincente={r['activation']}  "
+                      f"eval={r['eval_activation']}  test_acc={r['test_acc']:.4f}  "
+                      f"test_loss={r['test_loss']:.4f}")
+            else:
+                print(f"  {r['experiment']}  ->  attiv={r['activation']}  "
+                      f"retrain_acc={r.get('retrain_acc')}  retrain_loss={r.get('retrain_loss')}")
         return
 
     # ── Batch (parent folder): REPORT ONLY ───────────────────────────────────

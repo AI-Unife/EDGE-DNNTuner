@@ -169,9 +169,17 @@ class NeuralNetwork(BaseNeuralNetwork):
         """
         # 1) clear session
         tf.keras.backend.clear_session()
+
+        def _per_frame_shape(arr):
+            """(H, W, C) whether arr is a dense [N, T, H, W, C] array or a 1-D
+            object array of variable-length [T_i, H, W, C] sequences."""
+            if getattr(arr, "dtype", None) == object:
+                return tuple(np.asarray(arr[0]).shape[1:])
+            return tuple(arr.shape[2:])
+
         if (self.exp_cfg.mode in ("fwdPass", "hybrid")) and "gesture" in self.exp_cfg.dataset :
-            input_shape = self.dataset.X_train.shape[2:]  # (H, W, C) for gesture pipeline
-            pos_input_shape = self.dataset.pos_train.shape[2:] if self.is_roi else None
+            input_shape = _per_frame_shape(self.dataset.X_train)  # (H, W, C) for gesture pipeline
+            pos_input_shape = _per_frame_shape(self.dataset.pos_train) if self.is_roi else None
         else:
             input_shape = self.dataset.X_train.shape[1:]  # generic (H, W, C)
             pos_input_shape = self.dataset.pos_train.shape[1:] if self.is_roi else None
@@ -192,9 +200,9 @@ class NeuralNetwork(BaseNeuralNetwork):
         # Compute FLOPs (approximate; counts MACs as 2 FLOPs)
         # Use same shape logic as build_network: shape[2:] for gesture fwdPass/hybrid data
         if (self.exp_cfg.mode in ("fwdPass", "hybrid")) and "gesture" in self.exp_cfg.dataset:
-            data_shape = self.dataset.X_train.shape[2:]
+            data_shape = _per_frame_shape(self.dataset.X_train)
             if self.is_roi:
-                pos_shape = self.dataset.pos_train.shape[2:]
+                pos_shape = _per_frame_shape(self.dataset.pos_train)
         else:
             data_shape = self.dataset.X_train.shape[1:]
             if self.is_roi:

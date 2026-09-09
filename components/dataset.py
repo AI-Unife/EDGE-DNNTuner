@@ -3,6 +3,18 @@ from __future__ import annotations
 import os
 import numpy as np
 
+
+def _stack_or_object(items):
+    """Stack a list of arrays into one ndarray when they share a shape; otherwise
+    return a 1-D object array (variable-length gesture sequences under fixed Δt)."""
+    arrs = [np.asarray(a) for a in items]
+    if len(arrs) > 0 and all(a.shape == arrs[0].shape for a in arrs):
+        return np.stack(arrs).astype(np.float32)
+    out = np.empty(len(arrs), dtype=object)
+    for i, a in enumerate(arrs):
+        out[i] = a.astype(np.float32)
+    return out
+
 def get_balanced_subset(x, y, n_per_class=500):
     """
     Obtain a balanced subset of the dataset.
@@ -41,9 +53,20 @@ class TunerDataset:
     Y_test: np.ndarray
     n_classes: int
     
+    @staticmethod
+    def _as_float32(arr):
+        """Cast to float32, element-wise for ragged/object arrays (variable-length
+        gesture sequences), plain cast otherwise."""
+        if getattr(arr, "dtype", None) == object:
+            out = np.empty(len(arr), dtype=object)
+            for i, a in enumerate(arr):
+                out[i] = np.asarray(a, dtype=np.float32)
+            return out
+        return arr.astype(np.float32)
+
     def data_as_float32(self):
-        self.X_train = self.X_train.astype(np.float32)
-        self.X_test  = self.X_test.astype(np.float32)
+        self.X_train = self._as_float32(self.X_train)
+        self.X_test  = self._as_float32(self.X_test)
 
     def normalize_data(self):
         self.X_train = self.X_train.astype(np.float32) / 255.0
@@ -261,37 +284,56 @@ class TunerDataset:
         print(f"\tX_test:{len(x_test)}")
         print(f"\tY_test:{len(y_test)}")
 
-    def ªload_gesture(self):
-        """Load DVSGesture dataset using the specialized gesture_dataset module."""
+    def load_gesture(self, test_only: bool = False):
+        """Load DVSGesture dataset using the specialized gesture_dataset module.
+
+        In fwdPass mode each recording has its own number of frames (fixed Δt),
+        so X_train/X_test come back as 1-D object arrays of [T_i, H, W, 2] arrays.
+        ``test_only=True`` loads only the test split (train left empty).
+        """
         from components.gesture_dataset import gesture_data
-        
+
         self.n_classes = 11
-        self.X_train, self.Y_train, self.X_test, self.Y_test = gesture_data(num_classes=11, ROI=False)
-        
-        print(self.X_train.shape[0], 'train samples')
-        print(self.X_test.shape[0], 'test samples')
-    
-    def load_roi_gesture(self, frame_size: int = 32):
-        """Load DVSGesture dataset using the specialized gesture_dataset module, with ROI."""
+        X_train_raw, self.Y_train, X_test_raw, self.Y_test = gesture_data(
+            num_classes=11, ROI=False, test_only=test_only
+        )
+        self.X_train = _stack_or_object(list(X_train_raw)) if len(X_train_raw) else np.array([])
+        self.X_test = _stack_or_object(list(X_test_raw))
+
+        print(len(self.X_train), 'train samples')
+        print(len(self.X_test), 'test samples')
+
+    def load_roi_gesture(self, frame_size: int = 32, test_only: bool = False):
+        """Load DVSGesture dataset using the specialized gesture_dataset module, with ROI.
+
+        In fwdPass mode X and pos come back as 1-D object arrays (variable T_i);
+        in fixed-frame modes they stack into dense arrays as before.
+        ``test_only=True`` loads only the test split (train left empty).
+        """
         from components.gesture_dataset import gesture_data
-        
+
         self.n_classes = 11
-        X_train_raw, self.Y_train, X_test_raw, self.Y_test = gesture_data(num_classes=11, ROI=True, frame_size=frame_size)
-        if isinstance(X_test_raw[0], dict):
-            self.X_train = np.array([item["data"] for item in X_train_raw]).astype("float32")
-            self.pos_train = np.array([item["pos"] for item in X_train_raw])
-            self.X_test = np.array([item["data"] for item in X_test_raw]).astype("float32")
-            self.pos_test = np.array([item["pos"] for item in X_test_raw])
-            print(self.pos_train.shape, 'pos train samples')
-            print(self.pos_test.shape, 'pos test pos samples')
-        else: 
-            self.X_train = np.array(X_train_raw).astype("float32")
-            self.X_test = np.array(X_test_raw).astype("float32")
-        
-        print(self.X_train.shape, 'X train samples')
-        print(self.Y_train.shape, 'Y train label samples')
-        print(self.X_test.shape, 'X test samples')
-        print(self.Y_test.shape, 'Y test label samples')
+        X_train_raw, self.Y_train, X_test_raw, self.Y_test = gesture_data(
+            num_classes=11, ROI=True, frame_size=frame_size, test_only=test_only
+        )
+        if len(X_test_raw) and isinstance(X_test_raw[0], dict):
+            self.X_test = _stack_or_object([item["data"] for item in X_test_raw])
+            self.pos_test = _stack_or_object([item["pos"] for item in X_test_raw])
+            if len(X_train_raw):
+                self.X_train = _stack_or_object([item["data"] for item in X_train_raw])
+                self.pos_train = _stack_or_object([item["pos"] for item in X_train_raw])
+            else:
+                self.X_train = np.array([])
+                self.pos_train = None
+            print(len(self.pos_test), 'pos test samples')
+        else:
+            self.X_train = _stack_or_object(list(X_train_raw)) if len(X_train_raw) else np.array([])
+            self.X_test = _stack_or_object(list(X_test_raw))
+
+        print(len(self.X_train), 'X train samples')
+        print(len(self.Y_train), 'Y train label samples')
+        print(len(self.X_test), 'X test samples')
+        print(len(self.Y_test), 'Y test label samples')
 
     def _load_cimads_dir(self, root_dir: str, resize=None, label_to_int=None):
         """

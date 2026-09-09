@@ -116,31 +116,67 @@ def accuracy(outputs: tf.Tensor, targets: tf.Tensor) -> float:
     return float(acc.numpy())
 
 
-def eval_model(model: tf.keras.Model, x_input, y: tf.Tensor) -> Tuple[float, float]:
+def eval_model(model: tf.keras.Model, x_input, y) -> Tuple[float, float]:
     """
-    Evaluate temporal model output as [B, T, C], with optional ROI second input.
+    Frame-by-frame evaluation of a per-frame classifier, one recording at a time.
+
+    Each recording i has its own number of frames T_i (fixed-Δt framing), so X is
+    iterated sample-wise instead of over a shared time axis:
+      - the model is run on the [T_i, H, W, C] stack of frames -> [T_i, C] logits
+      - the sequence prediction is the majority vote over per-frame argmax
+      - the sequence loss is CategoricalCrossentropy with the (constant) clip label
+        broadcast over its T_i frames
+
+    Args:
+        model:   per-frame Keras classifier (logits output).
+        x_input: object/dense array of [T_i, H, W, C] frames, or [x_data, x_pos]
+                 for ROI (x_pos elements are [T_i, ...] aligned to x_data).
+        y:       clip labels as [B] integers, [B, C] one-hot, or [B, T, C]
+                 time-repeated one-hot (label is taken as constant over time).
+
+    Returns:
+        (mean_loss, sequence_accuracy) as plain floats.
     """
     if isinstance(x_input, list) and len(x_input) == 2:
         x_data, x_pos = x_input
         is_roi = True
     else:
-        x_data = x_input
-        x_pos = None
-        is_roi = False
+        x_data, x_pos, is_roi = x_input, None, False
 
-    time_steps = x_data.shape[1]
-    outputs_val_list = []
+    y = np.asarray(y)
+    if y.ndim == 3:        # [B, T, C] time-repeated one-hot -> per-clip label
+        y_true = y[:, 0, :].argmax(axis=1)
+        n_classes = int(y.shape[2])
+    elif y.ndim == 2:      # [B, C] one-hot
+        y_true = y.argmax(axis=1)
+        n_classes = int(y.shape[1])
+    else:                  # [B] integer labels
+        y_true = y.astype(int)
+        n_classes = int(model.output_shape[-1])
+
     loss_fn = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
 
-    for t in range(time_steps):
-        if is_roi:
-            outputs_val_list.append(model([x_data[:, t], x_pos[:, t]], training=False))
-        else:
-            outputs_val_list.append(model(x_data[:, t], training=False))
+    preds = np.empty(len(x_data), dtype=int)
+    losses = np.empty(len(x_data), dtype=float)
 
-    val_outputs = tf.stack(outputs_val_list, axis=1)
-    val_loss = float(loss_fn(y, val_outputs).numpy())
-    val_acc = accuracy(val_outputs, y)
+    for i in range(len(x_data)):
+        xi = tf.convert_to_tensor(np.asarray(x_data[i], dtype=np.float32))   # [T_i, H, W, C]
+        if is_roi:
+            pi = tf.convert_to_tensor(np.asarray(x_pos[i], dtype=np.float32))
+            out_i = model([xi, pi], training=False)                         # [T_i, C]
+        else:
+            out_i = model(xi, training=False)                               # [T_i, C]
+        out_i = tf.convert_to_tensor(out_i)
+
+        frame_pred = tf.argmax(out_i, axis=-1, output_type=tf.int32).numpy()
+        preds[i] = np.bincount(frame_pred, minlength=n_classes).argmax()
+
+        t_i = int(out_i.shape[0])
+        yi = tf.one_hot(np.full(t_i, y_true[i], dtype=np.int32), n_classes)
+        losses[i] = float(loss_fn(yi, out_i).numpy())
+
+    val_acc = float((preds == y_true).mean())
+    val_loss = float(losses.mean())
     return val_loss, val_acc
 
 
