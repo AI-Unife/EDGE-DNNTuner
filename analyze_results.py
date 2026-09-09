@@ -449,12 +449,14 @@ class ResultsAnalyzer:
 
     def get_best_result(self) -> Optional[ExperimentResult]:
         """Return the best result (highest accuracy)"""
-        valid_results = [r for r in self.results if r.accuracy is not None and r.hyperparams['activation'] in ['relu', 'selu'] and r.nparams is not None and r.nparams <= 300000]
+        # valid_results = [r for r in self.results if r.accuracy is not None and r.hyperparams['activation'] in ['relu', 'selu'] and r.nparams is not None and r.nparams <= 300000]
+        valid_results = [r for r in self.results if r.accuracy is not None]
         # print(f"  Found {len(valid_results)} valid results with accuracy and hyperparams")
         # print(f"  Valid results: {[r for r in valid_results]}")
         if not valid_results:
             return None
-        return max(valid_results, key=lambda r: r.accuracy if r.accuracy is not None else float('-inf'))  # Best accuracy
+        # return max(valid_results, key=lambda r: r.accuracy if r.accuracy is not None else float('-inf'))  # Best accuracy
+        return min(valid_results, key=lambda r: r.score if r.score is not None else float('inf'))  # Best score (lower is better)
     
     def save_experiment_csv(self, output_csv: Path) -> bool:
         """
