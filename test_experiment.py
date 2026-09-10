@@ -265,7 +265,7 @@ def _parse_best_from_out(
                 continue
 
             # Rank: prefer SCORE (lower = better), fall back to ACCURACY (higher = better)
-            has_score = any(it["score"] is not None for it in iterations)
+            has_score = None #any(it["score"] is not None for it in iterations)
             valid = [
                 it for it in iterations
                 if (require_activation is None or it["params"].get("activation") == require_activation)
@@ -524,8 +524,10 @@ def _force_activation(model, activation: str) -> None:
     changed = 0
     for layer in model.layers:
         if hasattr(layer, "activation") and layer.activation is not None:
-            layer.activation = tf.keras.activations.get(activation)
-            changed += 1
+            print(f"[Force {activation}] Patching layer '{layer.name}' Activation: {layer.activation.__name__} -> {activation}") 
+            if layer.activation.__name__ not in ['softmax', 'relu', 'selu']:
+                layer.activation = tf.keras.activations.get(activation)
+                changed += 1
     print(f"[Force {activation}] Patched activation on {changed} layer(s) of the saved model.")
 
 
@@ -711,8 +713,8 @@ def run_single_experiment(experiment: Path, args, mode: str, activation: str) ->
 
     # ── 4. Evaluate the saved model (only when relevant for this mode) ───────
     if saved_model is not None:
-        if mode == "force_activation_infer":
-            _force_activation(saved_model, activation)
+        # if mode == "force_activation_infer":
+        #     _force_activation(saved_model, activation)
         saved_model.summary()
         print("\n[4] Evaluating saved model (best-model.keras)...")
         saved_loss, saved_acc = _eval_keras_model(saved_model, dataset, cfg)
@@ -766,6 +768,8 @@ def run_single_experiment(experiment: Path, args, mode: str, activation: str) ->
     else:
         raise ValueError(f"Unsupported backend: {cfg.backend}")
 
+    print(f"Best iteration hyperparameters: {best_params}")
+
     backend_instance = module_backend.ModuleBackend()
     nn = neural_network.NeuralNetwork(
         backend=backend_instance,
@@ -777,6 +781,7 @@ def run_single_experiment(experiment: Path, args, mode: str, activation: str) ->
 
     nn.build_network(best_params, layer_x_block=layer_x_block)
     print(f"[5] Model built (backend={cfg.backend}).")
+    nn.model.model.summary()
 
     # ── 6. Retrain from scratch and evaluate ─────────────────────────────────
     print(f"\n[6] Retraining for {cfg.epochs} epoch(s)...")
