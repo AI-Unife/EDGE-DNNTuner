@@ -35,8 +35,8 @@ import nvdla.profiler as profiler
 from components.model_interface import LayerSpec, LayerTypes, Params
 from components.dataset import TunerDataset
 _EXCLUDED_CONFIG_KEYS = ["name", "verbose", "polarity", "created_at"]
-COMPUTE_FLOPS = True
-COMPUTE_HW = False
+COMPUTE_FLOPS = False
+COMPUTE_HW = True
 
 @dataclass
 class ExperimentResult:
@@ -94,11 +94,15 @@ class ResultsAnalyzer:
             return False
         
         scores = self._load_scores()
-        has_score_file = bool(scores)
-        if has_score_file:
+        if scores:
             print(f"  score_report.txt file found, will use scores calculated during training")
         else:
-            print("  No score_report.txt file found, score will be recomputed from module logs when possible")
+            scores = self._load_scores_from_out()
+            if scores:
+                print("  No score_report.txt file found, using the SCORE lines from the .out file")
+            else:
+                print("  No score_report.txt nor SCORE lines in the .out file, "
+                      "score will be recomputed from module logs when possible")
 
         # Load hyperparameters
         hyperparams_list = self._load_hyperparams()
@@ -212,7 +216,45 @@ class ResultsAnalyzer:
         except Exception as e:
             print(f"  Error reading {score_file}: {e}")
             return []
-        
+
+        return scores
+
+    def _load_scores_from_out(self) -> List[Optional[float]]:
+        """Fallback: read the per-iteration SCORE from the single .out file.
+
+        The .out is split on the ``--- ITERATION N ---`` banners (ANSI codes
+        stripped); each block is expected to contain one ``SCORE: <value>`` line.
+        Returns the scores in iteration order (same ordering as score_report.txt),
+        or [] if no .out / no SCORE lines are found.
+        """
+        import re
+
+        try:
+            out_file = self._get_out_file()
+        except Exception as e:
+            print(f"  Error locating .out file for scores: {e}")
+            return []
+
+        try:
+            with open(out_file, "r", encoding="utf-8", errors="replace") as f:
+                text = f.read()
+        except Exception as e:
+            print(f"  Error reading {out_file}: {e}")
+            return []
+
+        text = re.sub(r"\x1b\[[0-9;]*m", "", text)  # strip ANSI colour codes
+        blocks = re.split(r"---\s*ITERATION\s+\d+\s*---", text)
+        if len(blocks) < 2:
+            return []
+
+        score_pattern = re.compile(r"Score: \s*([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)")
+        scores: List[Optional[float]] = []
+        for block in blocks[1:]:  # blocks[0] is the pre-first-iteration header
+            m = score_pattern.search(block)
+            scores.append(float(m.group(1)) if m else None)
+
+        if not any(s is not None for s in scores):
+            return []
         return scores
 
 
@@ -243,14 +285,14 @@ class ResultsAnalyzer:
 
 
     def _get_out_file(self):
-        out_files = list(Path(self.experiment_dir).glob("*.out"))
+        out_files = sorted(Path(self.experiment_dir).glob("*.out"), key=lambda p: p.name)
 
         if len(out_files) == 0:
             raise FileNotFoundError("Nessun file .out trovato in {}".format(self.experiment_dir))
-        elif len(out_files) > 1:
-            raise ValueError(f"Più file .out trovati: {out_files}")
+        if len(out_files) > 1:
+            print(f"  {len(out_files)} file .out trovati, uso il più recente per nome: {out_files[-1].name}")
 
-        return str(out_files[0])
+        return str(out_files[-1])
     
     
     def _extract_hyperparams_per_iteration(self, input_file):
@@ -303,14 +345,14 @@ class ResultsAnalyzer:
 
 
     def _get_out_file(self):
-        out_files = list(Path(self.experiment_dir).glob("*.out"))
+        out_files = sorted(Path(self.experiment_dir).glob("*.out"), key=lambda p: p.name)
 
         if len(out_files) == 0:
             raise FileNotFoundError("Nessun file .out trovato in {}".format(self.experiment_dir))
-        elif len(out_files) > 1:
-            raise ValueError(f"Più file .out trovati: {out_files}")
+        if len(out_files) > 1:
+            print(f"  {len(out_files)} file .out trovati, uso il più recente per nome: {out_files[-1].name}")
 
-        return str(out_files[0])
+        return str(out_files[-1])
 
 
     def _load_hyperparams(self) -> List[Optional[Dict[str, Any]]]:
@@ -449,13 +491,13 @@ class ResultsAnalyzer:
 
     def get_best_result(self) -> Optional[ExperimentResult]:
         """Return the best result (highest accuracy)"""
-        valid_results = [r for r in self.results if r.accuracy is not None and r.hyperparams['activation'] in ['relu', 'selu'] and r.nparams is not None and r.nparams <= 300000]
+        valid_results = [r for r in self.results if r.accuracy is not None] #and r.hyperparams['activation'] in ['relu', 'selu'] and r.nparams is not None and r.nparams <= 300000]
         # print(f"  Found {len(valid_results)} valid results with accuracy and hyperparams")
         # print(f"  Valid results: {[r for r in valid_results]}")
         if not valid_results:
             return None
-        return max(valid_results, key=lambda r: r.accuracy if r.accuracy is not None else float('-inf'))  # Best accuracy
-    
+        # return max(valid_results, key=lambda r: r.accuracy if r.accuracy is not None else float('-inf'))  # Best accuracy
+        return min(valid_results, key=lambda r: r.score if r.score is not None else float('inf'))  # Best score (lower is better)
     def save_experiment_csv(self, output_csv: Path) -> bool:
         """
         Save the experiment results to CSV.
@@ -537,7 +579,7 @@ class ResultsAnalyzer:
     def _recompute_score(self, result: ExperimentResult) -> Optional[float]:
         """Recompute score when score_report is missing, following controller training logic."""
         PENALTY_SCORE = 1e10
-        acc_w = 1 - (result.w_flops if result.w_flops is not None else 0.3)
+        acc_w = 0.7
 
         accuracy = self._safe_float(result.accuracy)
         nparams = self._safe_float(result.nparams)
@@ -560,6 +602,7 @@ class ResultsAnalyzer:
         has_opt_term = False
 
         if use_flops_module and nparams is not None:
+            # acc_w -= self._safe_float(self.config.get("w_flops", 0.33)) or 0.33
             nparams_th = self._safe_float(self.config.get("nparams_th"))
             if nparams_th and nparams_th > 0:
                 w_flops = self._safe_float(self.config.get("w_flops", 0.33)) or 0.33
@@ -568,7 +611,8 @@ class ResultsAnalyzer:
                 has_opt_term = True
 
         if use_hw_module and hw_total_cost is not None:
-            w_hw = self._safe_float(self.config.get("w_HW", 0.33)) or 0.33
+            acc_w -= self._safe_float(self.config.get("w_HW", 0.3)) or 0.3
+            w_hw = self._safe_float(self.config.get("w_HW", 0.3)) or 0.3
             # hardware_module.optimiziation_function(): total_cost
             opt_value += w_hw * hw_total_cost
             has_opt_term = True
@@ -723,7 +767,7 @@ def _calculate_hardware(exp_dir: Path) -> Optional[Tuple[float, float, float, st
             def __init__(self, layers: Dict[str, LayerSpec]):
                 self.layers = layers
 
-        hw_module = hardware_module(weight_cost=0.7)
+        hw_module = hardware_module(weight_cost=0.3)
         hw_module.update_state(_ModelSpecContainer(model_specs))
 
         latency = hw_module.latency

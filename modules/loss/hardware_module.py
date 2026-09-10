@@ -39,7 +39,7 @@ class hardware_module(common_interface):
                       
         # init list of available configurations to an empty dict
         self.nvdla = {}
-        self.specs_dir = "/hpc/home/bzzlca/Symbolic_DNN-Tuner/nvdla/specs/"
+        self.specs_dir = "/Users/alicebizzarri/Desktop/Work/AIDA4Edge/Symbolic_DNN-Tuner/nvdla/specs/"
         
         # iterate over each configuration
         for config in nvdla_list:
@@ -54,6 +54,7 @@ class hardware_module(common_interface):
                                                 'total_cost': 0}
             else:
                 print(colors.FAIL, f"|  --------- {config['name']} CONFIGURATION FILE DOESN'T EXIST  -------  |\n", colors.ENDC)
+                print(self.specs_dir + config['path'])
         
         if self.nvdla == {}:
             raise ModuleNotFoundError("No NVDLA configuration found")
