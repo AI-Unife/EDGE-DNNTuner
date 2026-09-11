@@ -38,6 +38,8 @@ class ConfigSchema:
     # Gesture-specific parameters
     frames: int = 16                             # fwdPass: max sequence length (pad/truncate target); hybrid/depth: number of frames
     delta_t: int = 200000                        # fwdPass: microseconds per frame when framing with a fixed time window
+    train_framing: str = "frames"                # fwdPass TRAIN split only: "frames" (fixed #frames, config's frames) or
+                                                  # "delta_t" (fixed time window, config's delta_t). TEST is always delta_t.
     mode: str = "fwdPass"                        # Experiment mode (fwdPass, depth, hybrid)
     channels: int = 2                            # Number of channels for the dataset
     polarity: str = "both"                       # Polarity for event-based datasets (both, sum, sub, drop)
@@ -79,6 +81,7 @@ def create_config_file(exp_dir: str | Path, overrides: Optional[Dict[str, Any]] 
         "opt": schema.opt,
         "frames": schema.frames,
         "delta_t": schema.delta_t,
+        "train_framing": schema.train_framing,
         "mode": schema.mode,
         "channels": schema.channels,
         "polarity": schema.polarity,
@@ -130,7 +133,14 @@ def _validate(d: Dict[str, Any]) -> None:
     if mode not in valid_modes:
         print(f"WARNING: Invalid mode '{mode}'. Choose from: {sorted(valid_modes)}. Set to 'fwdPass'")
         d['mode'] = 'fwdPass'
-    
+
+    # train_framing (fwdPass gesture/roigesture TRAIN split only)
+    train_framing = d.get("train_framing", "frames")
+    valid_train_framings = {"frames", "delta_t"}
+    if train_framing not in valid_train_framings:
+        print(f"WARNING: Invalid train_framing '{train_framing}'. Choose from: {sorted(valid_train_framings)}. Set to 'frames'")
+        d['train_framing'] = 'frames'
+
     # polarity (for event-based datasets)
     polarity = d.get("polarity", "both")
     valid_polarities = {"both", "sum", "sub", "drop"}
@@ -182,6 +192,7 @@ def _apply_defaults(d: Dict[str, Any]) -> Dict[str, Any]:
         "opt": d.get("opt", schema.opt),
         "frames": d.get("frames", schema.frames),
         "delta_t": d.get("delta_t", schema.delta_t),
+        "train_framing": d.get("train_framing", schema.train_framing),
         "mode": d.get("mode", schema.mode),
         "channels": d.get("channels", schema.channels),
         "polarity": d.get("polarity", schema.polarity),

@@ -438,8 +438,12 @@ def get_datasets_numpy(cfg, test_only: bool = False):
         ((x_train, y_train), (x_test, y_test))
     """
     dataset_path = './data/'
-    # train split framed with cfg.frames, test split with cfg.delta_t (fwdPass).
-    cache_dir = f"./cache/DVSGesture_{cfg.mode}_tr{cfg.frames}_te{cfg.delta_t}_{cfg.channels}/"
+    # TRAIN split framed per cfg.train_framing ("frames" -> cfg.frames, "delta_t" ->
+    # cfg.delta_t); TEST split is always framed with cfg.delta_t (fwdPass).
+    train_framing = getattr(cfg, "train_framing", "frames")
+    train_ragged = (cfg.mode == "fwdPass") and (train_framing == "delta_t")
+    train_tag = f"te{cfg.delta_t}" if train_ragged else f"fr{cfg.frames}"
+    cache_dir = f"./cache/DVSGesture_{cfg.mode}_tr{train_tag}_te{cfg.delta_t}_{cfg.channels}/"
     # resolve with fallback
     dataset_path, cache_dir = _resolve_paths(dataset_path, cache_dir)
     _ensure_cache_dir(cache_dir)
@@ -481,12 +485,12 @@ def get_datasets_numpy(cfg, test_only: bool = False):
     if test_only:
         return _EMPTY, (x_test, y_test)
 
-    train_tf, train_target_tf = _split_pipeline(split_ragged=False)
+    train_tf, train_target_tf = _split_pipeline(split_ragged=train_ragged)
     train = tonic.datasets.DVSGesture(
         save_to=dataset_path, transform=train_tf, target_transform=train_target_tf, train=True
     )
     cached_train = tonic.DiskCachedDataset(train, cache_path=os.path.join(cache_dir, "train"))
-    x_train, y_train = dataset_to_numpy(cached_train, cfg, ragged=False)
+    x_train, y_train = dataset_to_numpy(cached_train, cfg, ragged=train_ragged)
 
     return (x_train, y_train), (x_test, y_test)
 
@@ -502,12 +506,17 @@ def get_ROI_numpy(cfg, frame_size: int = 32, test_only: bool = False) -> Tuple[T
         ((x_train, y_train), (x_test, y_test))
     """
     dataset_path = "rois_and_coordinates/datasets/"
-    cache_dir = f"./cache/DVS_ROI_{frame_size}_{cfg.mode}_tr{cfg.frames}_te{cfg.delta_t}_{cfg.channels}/"
+    # TRAIN split framed per cfg.train_framing ("frames" -> cfg.frames, "delta_t" ->
+    # cfg.delta_t); TEST split is always framed with cfg.delta_t (fwdPass).
+    train_framing = getattr(cfg, "train_framing", "frames")
+    train_ragged = (cfg.mode == "fwdPass") and (train_framing == "delta_t")
+    train_tag = f"te{cfg.delta_t}" if train_ragged else f"fr{cfg.frames}"
+    cache_dir = f"./cache/DVS_ROI_{frame_size}_{cfg.mode}_tr{train_tag}_te{cfg.delta_t}_{cfg.channels}/"
     output_size = (frame_size, frame_size, 2)
     _ensure_cache_dir(cache_dir)
     print("cache_dir:", cache_dir)
 
-    # fwdPass: TRAIN = fixed number of frames (old convention), TEST = fixed Δt
+    # fwdPass: TRAIN framing depends on cfg.train_framing, TEST = fixed Δt
     # (variable length). Events and the ROI map use the SAME framing so their
     # per-recording frame counts line up. hybrid/depth: unchanged.
     def _split_pipeline(split_ragged: bool):
@@ -552,7 +561,7 @@ def get_ROI_numpy(cfg, frame_size: int = 32, test_only: bool = False) -> Tuple[T
     if test_only:
         return _EMPTY, (x_test, y_test)
 
-    train_tf, train_target_tf, train_pos_tf = _split_pipeline(split_ragged=False)
+    train_tf, train_target_tf, train_pos_tf = _split_pipeline(split_ragged=train_ragged)
     train = DVSGestureROI(
         dataset_path,
         output_size=output_size,
@@ -563,7 +572,7 @@ def get_ROI_numpy(cfg, frame_size: int = 32, test_only: bool = False) -> Tuple[T
     )
     print("Loaded ROI training dataset with", len(train), "samples.")
     cached_train = tonic.DiskCachedDataset(train, cache_path=os.path.join(cache_dir, "train"))
-    x_train, y_train = dataset_to_numpy(cached_train, cfg, ragged=False)
+    x_train, y_train = dataset_to_numpy(cached_train, cfg, ragged=train_ragged)
 
     return (x_train, y_train), (x_test, y_test)
 

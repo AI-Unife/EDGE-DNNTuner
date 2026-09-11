@@ -853,7 +853,9 @@ def run_single_experiment(experiment: Path, args, mode: str, activation: str) ->
     cfg = load_cfg(force=True)
 
     _delta_t = getattr(args, "delta_t", None)
-    if args.epochs is not None or args.backend is not None or _delta_t is not None:
+    _train_framing = getattr(args, "train_framing", None)
+    if (args.epochs is not None or args.backend is not None or _delta_t is not None
+            or _train_framing is not None):
         import yaml
 
         with open(config_path, "r") as f:
@@ -864,6 +866,8 @@ def run_single_experiment(experiment: Path, args, mode: str, activation: str) ->
             raw["backend"] = args.backend
         if _delta_t is not None:
             raw["delta_t"] = int(_delta_t)
+        if _train_framing is not None:
+            raw["train_framing"] = _train_framing
         with open(config_path, "w") as f:
             yaml.safe_dump(raw, f, sort_keys=False, allow_unicode=True)
         cfg = reload_cfg()
@@ -875,6 +879,9 @@ def run_single_experiment(experiment: Path, args, mode: str, activation: str) ->
     print(f"Epochs           : {cfg.epochs}")
     if cfg.mode == "fwdPass":
         print(f"delta_t          : {cfg.delta_t}")
+        if do_retrain:
+            print(f"train_framing    : {cfg.train_framing}  "
+                  f"({'fixed Δt (variable #frames)' if cfg.train_framing == 'delta_t' else f'fixed {cfg.frames} frames'})")
     print(f"Selection mode   : {mode}")
     print(f"Target activation: {activation}")
     print(f"Will retrain     : {do_retrain}")
@@ -1099,6 +1106,18 @@ def main():
             "Override delta_t (microseconds per frame) in the experiment's "
             "config.yaml before (re)training/evaluating. Used by the "
             "'auto_activation_*' modes and any retrain mode."
+        ),
+    )
+    parser.add_argument(
+        "--train-framing", type=str, default=None, choices=["frames", "delta_t"], dest="train_framing",
+        help=(
+            "fwdPass gesture/roigesture retrain only: how to frame the TRAINING "
+            "split. 'frames' (default) = fixed number of frames (config's "
+            "'frames'), i.e. a variable inter-frame time across recordings. "
+            "'delta_t' = fixed time window (config's delta_t), i.e. a variable "
+            "number of frames per recording, matching the TEST framing. The "
+            "test split is always framed with delta_t regardless of this flag. "
+            "If omitted, uses train_framing from config.yaml (default 'frames')."
         ),
     )
     parser.add_argument(
