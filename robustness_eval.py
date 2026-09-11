@@ -1,7 +1,9 @@
 """
 robustness_eval.py — operating-condition robustness of the "final" models
 (the ones handed to IHP for implementation): one or more ROI experiments
-(a single --roi-experiment, an entire --roi-parent folder, or both), compared
+(a single --roi-experiment, an entire --roi-parent folder, or both — either
+roigesture_matrix or roigesture_coords, auto-detected per experiment from its
+config.yaml and labelled "ROI-matrix" / "ROI-coords" accordingly), compared
 against a single non-ROI (gesture) --plain-experiment.
 
 Re-running the script only computes what is missing: any (kind, model) whose
@@ -169,8 +171,24 @@ def _keep_indices_roi(dataset_path: str, frame_size: int, window_us):
     return keep, labels
 
 
-def _roi_frames_at_dt(dataset_path, frame_size, dt_us, window_us, keep_idx):
-    """Yield ([T, fs, fs, 2], [T, fs, fs, 1]) float32 stacks for kept recordings."""
+def _center_of_mass_seq(pos: np.ndarray) -> np.ndarray:
+    """[T, H, W, 1] activation map -> [T, 2] (mean_y, mean_x) center of mass per
+    frame — same computation as roigesture_coords in components/gesture_dataset.py."""
+    A = pos[..., 0]  # [T, H, W]
+    _, H, W = A.shape
+    yy, xx = np.indices((H, W))
+    tot = A.sum(axis=(1, 2))
+    tot_safe = np.where(tot > 0, tot, 1.0)
+    mean_y = (A * yy).sum(axis=(1, 2)) / tot_safe
+    mean_x = (A * xx).sum(axis=(1, 2)) / tot_safe
+    return np.stack([mean_y, mean_x], axis=1).astype(np.float32)
+
+
+def _roi_frames_at_dt(dataset_path, frame_size, dt_us, window_us, keep_idx, coords: bool = False):
+    """Yield ([T, fs, fs, 2], pos) float32 stacks for kept recordings.
+
+    pos is [T, fs, fs, 1] for roigesture_matrix, or [T, 2] (center of mass,
+    ``coords=True``) for roigesture_coords."""
     import tonic
     import tonic.transforms as T
     from components.gesture_dataset import DVSGestureROI
@@ -195,7 +213,10 @@ def _roi_frames_at_dt(dataset_path, frame_size, dt_us, window_us, keep_idx):
         data = np.transpose(np.asarray(x["data"]), (0, 2, 3, 1)).astype(np.float32)  # [T, fs, fs, 2]
         pos = np.transpose(np.asarray(x["pos"]), (0, 2, 3, 1)).astype(np.float32)    # [T, fs, fs, 1]
         n = min(len(data), len(pos))
-        yield data[:n], pos[:n]
+        data, pos = data[:n], pos[:n]
+        if coords:
+            pos = _center_of_mass_seq(pos)  # [T, 2]
+        yield data, pos
 
 
 # ---------------------------------------------------------------------------
@@ -444,8 +465,12 @@ def _run_experiment(experiment: Path, kind: str, is_roi: bool, args, windows):
             print(f"[{label}] ROI dataset '{dataset_path}' not found — skipping.")
             return [], []
         frame_size = _roi_frame_size(experiment)
+        # roigesture_coords -> pos collapsed to its [T, 2] center of mass;
+        # roigesture_matrix (or anything else) -> pos kept as a [T, fs, fs, 1] map.
+        coords = "coords" in str(getattr(cfg, "dataset", "")).lower()
+        print(f"[{label}] ROI variant: {'coords (center of mass)' if coords else 'matrix (position map)'}")
     else:
-        dataset_path, frame_size = "./data", None
+        dataset_path, frame_size, coords = "./data", None, False
 
     summ, per_sample = [], []
     for window_us in windows:
@@ -463,7 +488,7 @@ def _run_experiment(experiment: Path, kind: str, is_roi: bool, args, windows):
             approx = "variable" if window_us is None else f"~{window_us // dt_us}"
             print(f"[{label}] window={wtag}  inter-frame {dt_ms} ms ({approx} frames/sample)...")
             if is_roi:
-                it = _roi_frames_at_dt(dataset_path, frame_size, dt_us, window_us, keep)
+                it = _roi_frames_at_dt(dataset_path, frame_size, dt_us, window_us, keep, coords=coords)
             else:
                 it = _plain_frames_at_dt(dataset_path, dt_us, window_us, keep)
             rows = _eval_at_dt(model, it, labels, is_roi, dt_ms, n_classes=n_classes)
@@ -492,6 +517,23 @@ def _roi_frame_size(experiment: Path) -> int:
         if m:
             return int(m.group(1))
     return 32
+
+
+def _roi_kind_label(experiment: Path) -> str:
+    """"ROI-coords" / "ROI-matrix" (from config.yaml's dataset field), or the
+    generic "ROI" if it can't be determined without fully loading the config."""
+    try:
+        import yaml
+        with open(experiment / "config.yaml") as f:
+            raw = yaml.safe_load(f) or {}
+        name = str(raw.get("dataset", "")).lower()
+        if "coords" in name:
+            return "ROI-coords"
+        if "matrix" in name:
+            return "ROI-matrix"
+    except Exception:
+        pass
+    return "ROI"
 
 
 # ---------------------------------------------------------------------------
@@ -563,7 +605,7 @@ def main():
     if args.plain_experiment:
         targets.append((Path(args.plain_experiment).resolve(), "non-ROI", False))
     for d in roi_dirs:
-        targets.append((d, "ROI", True))
+        targets.append((d, _roi_kind_label(d), True))
 
     requested_windows = {"full" if w is None else f"{int(round(w / 1000))}ms" for w in windows}
     requested_dt = set(args.inter_frame_ms)
