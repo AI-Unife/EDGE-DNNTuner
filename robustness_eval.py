@@ -1,7 +1,14 @@
 """
 robustness_eval.py — operating-condition robustness of the "final" models
-(the ones handed to IHP for implementation): every ROI experiment in a parent
-folder, compared against a single non-ROI (gesture) experiment.
+(the ones handed to IHP for implementation): one or more ROI experiments
+(a single --roi-experiment, an entire --roi-parent folder, or both), compared
+against a single non-ROI (gesture) --plain-experiment.
+
+Re-running the script only computes what is missing: any (kind, model) whose
+full requested window/inter-frame matrix is already in
+<out-dir>/robustness_summary.csv is reused as-is instead of recomputed — most
+usefully the non-ROI model, which almost never changes between runs while new
+ROI experiments get added to the parent folder.
 
 The models were trained with a fixed number of frames, i.e. a *variable*
 inter-frame time across recordings (short clip -> small dt, long clip -> large
@@ -346,6 +353,52 @@ def _plot_stabilisation(summ, out_path: Path, wtag: str):
     print(f"  wrote {out_path}")
 
 
+_SUMM_INT_FIELDS = {"n_samples"}
+_SUMM_FLOAT_FIELDS = {"inter_frame_ms", "vote_acc", "per_frame_acc", "mean_n_frames",
+                       "stab_frame_p25", "stab_frame_p50", "stab_frame_p75",
+                       "stab_ms_p25", "stab_ms_p50", "stab_ms_p75"}
+_SAMPLE_INT_FIELDS = {"sample", "true", "pred_vote", "correct", "n_frames", "stab_frame", "stable_label"}
+_SAMPLE_FLOAT_FIELDS = {"inter_frame_ms", "per_frame_acc", "stab_ms"}
+
+
+def _coerce_row(row: dict, int_fields, float_fields) -> dict:
+    out = dict(row)
+    for k in int_fields:
+        if out.get(k) not in (None, ""):
+            out[k] = int(float(out[k]))
+    for k in float_fields:
+        if out.get(k) not in (None, ""):
+            out[k] = float(out[k])
+    return out
+
+
+def _load_existing(out_dir: Path):
+    """Load a previous run's CSVs, if any, so unchanged experiments can be skipped."""
+    summ, per_sample = [], []
+    summ_path = out_dir / "robustness_summary.csv"
+    per_path = out_dir / "robustness_per_sample.csv"
+    if summ_path.exists():
+        with open(summ_path, newline="") as f:
+            summ = [_coerce_row(r, _SUMM_INT_FIELDS, _SUMM_FLOAT_FIELDS) for r in csv.DictReader(f)]
+    if per_path.exists():
+        with open(per_path, newline="") as f:
+            per_sample = [_coerce_row(r, _SAMPLE_INT_FIELDS, _SAMPLE_FLOAT_FIELDS) for r in csv.DictReader(f)]
+    return summ, per_sample
+
+
+def _already_computed(existing_summ, kind: str, model: str, windows, inter_frame_ms) -> bool:
+    """True if every requested (window, inter-frame) combo for this (kind, model)
+    is already present in the existing summary with at least one sample."""
+    want_windows = {"full" if w is None else f"{int(round(w / 1000))}ms" for w in windows}
+    want_dt = set(inter_frame_ms)
+    have = {
+        (s["window"], s["inter_frame_ms"])
+        for s in existing_summ
+        if s.get("kind") == kind and s.get("model") == model and s.get("n_samples", 0)
+    }
+    return all((w, dt) in have for w in want_windows for dt in want_dt)
+
+
 def _write_csvs(summ, per_sample, out_dir: Path):
     sfields = ["kind", "model", "window", "inter_frame_ms", "n_samples", "vote_acc",
                "per_frame_acc", "mean_n_frames", "stab_frame_p25", "stab_frame_p50",
@@ -504,6 +557,7 @@ def main():
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    existing_summ, existing_per_sample = _load_existing(out_dir)
 
     targets = []
     if args.plain_experiment:
@@ -511,11 +565,26 @@ def main():
     for d in roi_dirs:
         targets.append((d, "ROI", True))
 
-    print(f"[plan] {len(targets)} experiment(s), windows={['full' if w is None else f'{w//1000}ms' for w in windows]}, "
+    requested_windows = {"full" if w is None else f"{int(round(w / 1000))}ms" for w in windows}
+    requested_dt = set(args.inter_frame_ms)
+
+    print(f"[plan] {len(targets)} experiment(s), windows={sorted(requested_windows)}, "
           f"inter-frame ms={args.inter_frame_ms}")
 
     all_summ, all_per_sample = [], []
     for experiment, kind, is_roi in targets:
+        model_name = experiment.name
+        if _already_computed(existing_summ, kind, model_name, windows, args.inter_frame_ms):
+            print(f"\n[{kind}] {model_name}: already computed in {out_dir}/robustness_summary.csv "
+                  f"for the requested windows/inter-frame times — skipping recompute.")
+            all_summ += [s for s in existing_summ
+                         if s.get("kind") == kind and s.get("model") == model_name
+                         and s.get("window") in requested_windows and s.get("inter_frame_ms") in requested_dt]
+            all_per_sample += [r for r in existing_per_sample
+                                if r.get("kind") == kind and r.get("model") == model_name
+                                and r.get("window") in requested_windows and r.get("inter_frame_ms") in requested_dt]
+            continue
+
         print(f"\n{'='*70}\n{kind}: {experiment}\n{'='*70}")
         try:
             summ, per_sample = _run_experiment(experiment, kind, is_roi, args, windows)
