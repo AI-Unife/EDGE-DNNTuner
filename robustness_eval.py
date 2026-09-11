@@ -456,6 +456,11 @@ def _roi_experiment_dirs(args):
             sys.exit(1)
         for d in sorted(parent.iterdir()):
             if d.is_dir() and (d / "config.yaml").exists() and list(d.glob("*.out")):
+                dir_resolved = d.resolve()
+                print(f"[plan] found ROI experiment: {dir_resolved}")
+                if "fwdPass" not in dir_resolved.name:
+                    print(f"[plan] skipping {dir_resolved} (non forward-pass experiment)")
+                    continue
                 dirs.append(d.resolve())
     # de-dup, keep order
     seen, out = set(), []
