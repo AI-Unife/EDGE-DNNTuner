@@ -45,17 +45,23 @@ interactively if not passed on the command line). The TARGET activation
                             pick the winner automatically, then evaluate
                             Model/best-model.keras on the TEST SET ONLY (no
                             retraining). For gesture / roigesture_* the test
-                            split is framed with the config's delta_t.
+                            split is framed per --test-framing / config's
+                            test_framing (default: delta_t, variable #frames +
+                            majority vote; or frames, dense, config's frames).
                             best-model.keras is evaluated as-is; pass
                             --force-winner-activation to patch it to the winner
-                            when they differ. Optional: --delta-t <us>.
+                            when they differ. Optional: --delta-t <us>,
+                            --test-framing {frames,delta_t}.
 
   auto_activation_retrain  No --activation needed and NO saved model needed.
                             Same relu-vs-selu choice by logged accuracy, then
                             REBUILD that iteration's architecture from the logs
                             (hyper-neural.txt + layer_x_block), retrain it from
-                            scratch and test it. gesture / roigesture_* use the
-                            config's delta_t. Optional: --delta-t <us>,
+                            scratch and test it. gesture / roigesture_* frame
+                            TRAIN per --train-framing (default: frames) and
+                            TEST per --test-framing (default: delta_t) —
+                            independently selectable. Optional: --delta-t <us>,
+                            --train-framing / --test-framing {frames,delta_t},
                             --epochs, --backend.
 
 Steps (applied to each experiment directory):
@@ -712,22 +718,19 @@ def _run_auto_activation_infer(experiment: Path, args) -> dict:
     set_active_config(config_path)
     cfg = load_cfg(force=True)
 
-    # Optional Δt override from the command line.
+    # Optional Δt / test_framing override from the command line (in-memory only —
+    # this mode only reads the dataset, so there is nothing to persist to disk).
     if getattr(args, "delta_t", None) is not None:
-        import yaml
-        with open(config_path, "r") as f:
-            raw = yaml.safe_load(f)
         cfg["delta_t"] = int(args.delta_t)
-        # with open(config_path, "w") as f:
-        #     yaml.safe_dump(raw, f, sort_keys=False, allow_unicode=True)
-        # cfg = reload_cfg()
+    if getattr(args, "test_framing", None) is not None:
+        cfg["test_framing"] = args.test_framing
 
     winner, cands = _auto_select_activation(experiment)
 
     print(f"\n{'='*60}")
     print(f"Experiment       : {experiment}")
     print(f"Dataset          : {cfg.dataset}")
-    print(f"Mode             : {cfg.mode}   delta_t: {cfg.delta_t}")
+    print(f"Mode             : {cfg.mode}   delta_t: {cfg.delta_t}   test_framing: {cfg.test_framing}")
     print(f"Selection mode   : auto_activation_infer  (test set only)")
     print(f"{'='*60}")
     for a in SUPPORTED_ACTIVATIONS:
@@ -854,8 +857,9 @@ def run_single_experiment(experiment: Path, args, mode: str, activation: str) ->
 
     _delta_t = getattr(args, "delta_t", None)
     _train_framing = getattr(args, "train_framing", None)
+    _test_framing = getattr(args, "test_framing", None)
     if (args.epochs is not None or args.backend is not None or _delta_t is not None
-            or _train_framing is not None):
+            or _train_framing is not None or _test_framing is not None):
         import yaml
 
         with open(config_path, "r") as f:
@@ -868,9 +872,14 @@ def run_single_experiment(experiment: Path, args, mode: str, activation: str) ->
             raw["delta_t"] = int(_delta_t)
         if _train_framing is not None:
             raw["train_framing"] = _train_framing
+        if _test_framing is not None:
+            raw["test_framing"] = _test_framing
         with open(config_path, "w") as f:
             yaml.safe_dump(raw, f, sort_keys=False, allow_unicode=True)
         cfg = reload_cfg()
+
+    def _framing_desc(framing: str) -> str:
+        return "fixed Δt (variable #frames)" if framing == "delta_t" else f"fixed {cfg.frames} frames"
 
     print(f"\n{'='*60}")
     print(f"Experiment       : {experiment}")
@@ -879,9 +888,9 @@ def run_single_experiment(experiment: Path, args, mode: str, activation: str) ->
     print(f"Epochs           : {cfg.epochs}")
     if cfg.mode == "fwdPass":
         print(f"delta_t          : {cfg.delta_t}")
+        print(f"test_framing     : {cfg.test_framing}  ({_framing_desc(cfg.test_framing)})")
         if do_retrain:
-            print(f"train_framing    : {cfg.train_framing}  "
-                  f"({'fixed Δt (variable #frames)' if cfg.train_framing == 'delta_t' else f'fixed {cfg.frames} frames'})")
+            print(f"train_framing    : {cfg.train_framing}  ({_framing_desc(cfg.train_framing)})")
     print(f"Selection mode   : {mode}")
     print(f"Target activation: {activation}")
     print(f"Will retrain     : {do_retrain}")
@@ -1115,9 +1124,21 @@ def main():
             "split. 'frames' (default) = fixed number of frames (config's "
             "'frames'), i.e. a variable inter-frame time across recordings. "
             "'delta_t' = fixed time window (config's delta_t), i.e. a variable "
-            "number of frames per recording, matching the TEST framing. The "
-            "test split is always framed with delta_t regardless of this flag. "
+            "number of frames per recording. Independent of --test-framing. "
             "If omitted, uses train_framing from config.yaml (default 'frames')."
+        ),
+    )
+    parser.add_argument(
+        "--test-framing", type=str, default=None, choices=["frames", "delta_t"], dest="test_framing",
+        help=(
+            "fwdPass gesture/roigesture: how to frame the TEST split, for both "
+            "evaluation-only modes (force_activation_infer, auto_activation_infer) "
+            "and the test-set evaluation done after any retrain. 'delta_t' "
+            "(default) = fixed time window (config's delta_t), variable number of "
+            "frames per recording, per-recording majority-vote accuracy. 'frames' "
+            "= fixed number of frames (config's 'frames'), dense, matching the old "
+            "pre-delta_t evaluation. Independent of --train-framing. If omitted, "
+            "uses test_framing from config.yaml (default 'delta_t')."
         ),
     )
     parser.add_argument(

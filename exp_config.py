@@ -38,8 +38,10 @@ class ConfigSchema:
     # Gesture-specific parameters
     frames: int = 16                             # fwdPass: max sequence length (pad/truncate target); hybrid/depth: number of frames
     delta_t: int = 200000                        # fwdPass: microseconds per frame when framing with a fixed time window
-    train_framing: str = "frames"                # fwdPass TRAIN split only: "frames" (fixed #frames, config's frames) or
-                                                  # "delta_t" (fixed time window, config's delta_t). TEST is always delta_t.
+    train_framing: str = "frames"                # fwdPass TRAIN split: "frames" (fixed #frames, config's frames) or
+                                                  # "delta_t" (fixed time window, config's delta_t).
+    test_framing: str = "delta_t"                 # fwdPass TEST split: "delta_t" (fixed time window, variable #frames,
+                                                  # per-recording majority vote) or "frames" (fixed #frames, dense).
     mode: str = "fwdPass"                        # Experiment mode (fwdPass, depth, hybrid)
     channels: int = 2                            # Number of channels for the dataset
     polarity: str = "both"                       # Polarity for event-based datasets (both, sum, sub, drop)
@@ -82,6 +84,7 @@ def create_config_file(exp_dir: str | Path, overrides: Optional[Dict[str, Any]] 
         "frames": schema.frames,
         "delta_t": schema.delta_t,
         "train_framing": schema.train_framing,
+        "test_framing": schema.test_framing,
         "mode": schema.mode,
         "channels": schema.channels,
         "polarity": schema.polarity,
@@ -134,12 +137,17 @@ def _validate(d: Dict[str, Any]) -> None:
         print(f"WARNING: Invalid mode '{mode}'. Choose from: {sorted(valid_modes)}. Set to 'fwdPass'")
         d['mode'] = 'fwdPass'
 
-    # train_framing (fwdPass gesture/roigesture TRAIN split only)
+    # train_framing / test_framing (fwdPass gesture/roigesture splits)
     train_framing = d.get("train_framing", "frames")
-    valid_train_framings = {"frames", "delta_t"}
-    if train_framing not in valid_train_framings:
-        print(f"WARNING: Invalid train_framing '{train_framing}'. Choose from: {sorted(valid_train_framings)}. Set to 'frames'")
+    valid_framings = {"frames", "delta_t"}
+    if train_framing not in valid_framings:
+        print(f"WARNING: Invalid train_framing '{train_framing}'. Choose from: {sorted(valid_framings)}. Set to 'frames'")
         d['train_framing'] = 'frames'
+
+    test_framing = d.get("test_framing", "delta_t")
+    if test_framing not in valid_framings:
+        print(f"WARNING: Invalid test_framing '{test_framing}'. Choose from: {sorted(valid_framings)}. Set to 'delta_t'")
+        d['test_framing'] = 'delta_t'
 
     # polarity (for event-based datasets)
     polarity = d.get("polarity", "both")
@@ -193,6 +201,7 @@ def _apply_defaults(d: Dict[str, Any]) -> Dict[str, Any]:
         "frames": d.get("frames", schema.frames),
         "delta_t": d.get("delta_t", schema.delta_t),
         "train_framing": d.get("train_framing", schema.train_framing),
+        "test_framing": d.get("test_framing", schema.test_framing),
         "mode": d.get("mode", schema.mode),
         "channels": d.get("channels", schema.channels),
         "polarity": d.get("polarity", schema.polarity),

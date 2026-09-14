@@ -438,21 +438,24 @@ def get_datasets_numpy(cfg, test_only: bool = False):
         ((x_train, y_train), (x_test, y_test))
     """
     dataset_path = './data/'
-    # TRAIN split framed per cfg.train_framing ("frames" -> cfg.frames, "delta_t" ->
-    # cfg.delta_t); TEST split is always framed with cfg.delta_t (fwdPass).
+    # Each split is framed per its own cfg.*_framing ("frames" -> fixed cfg.frames,
+    # dense; "delta_t" -> fixed cfg.delta_t, variable length + per-recording
+    # majority vote). Independently configurable for TRAIN and TEST (fwdPass only).
     train_framing = getattr(cfg, "train_framing", "frames")
+    test_framing = getattr(cfg, "test_framing", "delta_t")
     train_ragged = (cfg.mode == "fwdPass") and (train_framing == "delta_t")
+    test_ragged = (cfg.mode == "fwdPass") and (test_framing == "delta_t")
     train_tag = f"te{cfg.delta_t}" if train_ragged else f"fr{cfg.frames}"
-    cache_dir = f"./cache/DVSGesture_{cfg.mode}_tr{train_tag}_te{cfg.delta_t}_{cfg.channels}/"
+    test_tag = f"te{cfg.delta_t}" if test_ragged else f"fr{cfg.frames}"
+    cache_dir = f"./cache/DVSGesture_{cfg.mode}_tr{train_tag}_te{test_tag}_{cfg.channels}/"
     # resolve with fallback
     dataset_path, cache_dir = _resolve_paths(dataset_path, cache_dir)
     _ensure_cache_dir(cache_dir)
     print("dataset_path:", dataset_path)
     print("cache_dir:", cache_dir)
 
-    # fwdPass: TRAIN uses a fixed number of frames (old convention), TEST uses a
-    # fixed time window Δt (variable length + per-recording majority vote).
-    # hybrid/depth: same framing for both splits (unchanged).
+    # hybrid/depth: same framing for both splits (unchanged), the ragged flags above
+    # are always False for them regardless of train_framing/test_framing.
     def _split_pipeline(split_ragged: bool):
         tfms: List = [
             transforms.Denoise(filter_time=10000),
@@ -474,7 +477,6 @@ def get_datasets_numpy(cfg, test_only: bool = False):
             target_transform = None
         return transforms.Compose(tfms), target_transform
 
-    test_ragged = (cfg.mode == "fwdPass")
     test_tf, test_target_tf = _split_pipeline(split_ragged=test_ragged)
     test = tonic.datasets.DVSGesture(
         save_to=dataset_path, transform=test_tf, target_transform=test_target_tf, train=False
@@ -506,19 +508,21 @@ def get_ROI_numpy(cfg, frame_size: int = 32, test_only: bool = False) -> Tuple[T
         ((x_train, y_train), (x_test, y_test))
     """
     dataset_path = "rois_and_coordinates/datasets/"
-    # TRAIN split framed per cfg.train_framing ("frames" -> cfg.frames, "delta_t" ->
-    # cfg.delta_t); TEST split is always framed with cfg.delta_t (fwdPass).
+    # Each split is framed per its own cfg.*_framing (see get_datasets_numpy).
     train_framing = getattr(cfg, "train_framing", "frames")
+    test_framing = getattr(cfg, "test_framing", "delta_t")
     train_ragged = (cfg.mode == "fwdPass") and (train_framing == "delta_t")
+    test_ragged = (cfg.mode == "fwdPass") and (test_framing == "delta_t")
     train_tag = f"te{cfg.delta_t}" if train_ragged else f"fr{cfg.frames}"
-    cache_dir = f"./cache/DVS_ROI_{frame_size}_{cfg.mode}_tr{train_tag}_te{cfg.delta_t}_{cfg.channels}/"
+    test_tag = f"te{cfg.delta_t}" if test_ragged else f"fr{cfg.frames}"
+    cache_dir = f"./cache/DVS_ROI_{frame_size}_{cfg.mode}_tr{train_tag}_te{test_tag}_{cfg.channels}/"
     output_size = (frame_size, frame_size, 2)
     _ensure_cache_dir(cache_dir)
     print("cache_dir:", cache_dir)
 
-    # fwdPass: TRAIN framing depends on cfg.train_framing, TEST = fixed Δt
-    # (variable length). Events and the ROI map use the SAME framing so their
-    # per-recording frame counts line up. hybrid/depth: unchanged.
+    # fwdPass: each split's framing depends on its own cfg.*_framing. Events and
+    # the ROI map use the SAME framing so their per-recording frame counts line
+    # up. hybrid/depth: unchanged.
     def _split_pipeline(split_ragged: bool):
         tfms: List = [
             transforms.Denoise(filter_time=10000),
@@ -545,7 +549,6 @@ def get_ROI_numpy(cfg, frame_size: int = 32, test_only: bool = False) -> Tuple[T
             target_transform = None
         return transforms.Compose(tfms), target_transform, pos_tf
 
-    test_ragged = (cfg.mode == "fwdPass")
     test_tf, test_target_tf, test_pos_tf = _split_pipeline(split_ragged=test_ragged)
     test = DVSGestureROI(
         dataset_path,
