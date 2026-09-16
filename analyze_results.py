@@ -694,6 +694,7 @@ def _calculate_hardware(exp_dir: Path, params: Dict = None, dataset = None) -> O
         nn = nn_cls(backend_cls(), dataset, da, reg, residual)
         nn.build_network(params, params.get("layer_x_block", 1))
         model = nn.model.model
+
     model_specs = _build_model_specs(model)
     if not model_specs:
         print("  Hardware estimate skipped: no supported Conv2D/Dense layers found")
