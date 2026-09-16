@@ -662,7 +662,7 @@ def _build_model_specs(model: Any) -> Dict[str, LayerSpec]:
     return specs
 
 
-def _calculate_hardware(exp_dir: Path) -> Optional[Tuple[float, float, float, str]]:
+def _calculate_hardware(exp_dir: Path, params: Dict = None, dataset = None) -> Optional[Tuple[float, float, float, str]]:
     """Estimate latency/cost/total_cost/config for exp_dir/Model/best-model.keras."""
     try:
         from tensorflow import keras
@@ -673,14 +673,25 @@ def _calculate_hardware(exp_dir: Path) -> Optional[Tuple[float, float, float, st
     model_path = exp_dir / "Model" / "best-model.keras"
     if not model_path.exists():
         print(f"  Model file not found for hardware estimate: {model_path}")
-        return None
 
     try:
         model = keras.models.load_model(model_path, compile=False)
     except Exception as e:
         print(f"  Error loading model for hardware estimate: {e}")
-        return None
 
+    if model is None and params is not None and dataset is not None:
+        print(f"  Model file not found for hardware estimate: {model_path}")
+        print("        rebuild model from best params")
+
+        from tensorflow_implementation import module_backend, neural_network
+        nn_cls = neural_network.NeuralNetwork
+        backend_cls = module_backend.ModuleBackend
+        da = params.get("da", False)
+        reg = params.get("reg", False)
+        residual = params.get("residual", False)
+        nn = nn_cls(backend_cls(), dataset, da, reg, residual)
+        nn.build_network(params, params.get("layer_x_block", 1))
+        model = nn.model
     model_specs = _build_model_specs(model)
     if not model_specs:
         print("  Hardware estimate skipped: no supported Conv2D/Dense layers found")
@@ -824,7 +835,7 @@ def analyze_all_experiments(parent_dir: Path, output_dir: Optional[Path] = None)
                 except:
                     print(f" FLOPS could not be calculated")
             if COMPUTE_HW and (any(value is None for value in [best_result.latency, best_result.hw_cost, best_result.hw_total_cost, best_result.hw_config])):
-                hw_metrics = _calculate_hardware(exp_dir)
+                hw_metrics = _calculate_hardware(exp_dir, best_result.hyperparams, dataset)
                 if hw_metrics is not None:
                     best_result.latency, best_result.hw_cost, best_result.hw_total_cost, best_result.hw_config = hw_metrics
             summary_row = {
