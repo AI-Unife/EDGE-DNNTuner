@@ -36,7 +36,7 @@ from components.model_interface import LayerSpec, LayerTypes, Params
 from components.dataset import TunerDataset
 _EXCLUDED_CONFIG_KEYS = ["name", "verbose", "polarity", "created_at"]
 COMPUTE_FLOPS = True
-COMPUTE_HW = False
+COMPUTE_HW = True
 
 @dataclass
 class ExperimentResult:
@@ -120,37 +120,7 @@ class ResultsAnalyzer:
             len(flops_data) if flops_data else 0,
             len(hw_data) if hw_data else 0
         )
-        dataset_name = self.config.get("dataset", "unknown")
-        dataset = TunerDataset()
-        if COMPUTE_FLOPS:
-            if dataset_name == "cifar10":
-                dataset.load_cifar_10()
-            elif dataset_name == "cifar100":
-                dataset.load_cifar_100()
-            elif dataset_name == "mnist":
-                dataset.load_mnist()
-            elif dataset_name == "cifar10_light" or dataset_name == "light_cifar" or dataset_name == "light":
-                dataset.load_light_cifar()
-            elif dataset_name == "gesture":
-                dataset.load_gesture()
-            elif "roigesture" in dataset_name:
-                dataset.load_roi_gesture()
-            elif dataset_name == "tinyimagenet":
-                dataset.load_tiny_imagenet()
-            elif dataset_name == "cca":
-                dataset.load_cca()
-            elif dataset_name == "cim":
-                dataset.load_cim()
-            else:
-                print(
-                    f"Unknown dataset: {dataset_name}. Supported: cifar10, cifar100, mnist, light, gesture, roigesture_matrix, roigesture_coords, cca, cim.")
-                exit(1)
-
         for i in range(max_iterations):
-            if COMPUTE_FLOPS and (flops_data is None or len(flops_data[i]) == 1):
-                flops, nparams = _compute_net_flops(hyperparams_list[i], dataset)
-                flops_data[i] = (nparams, flops)
-                print(f"  Iteration {i+1}: FLOPS recalculated from hyperparameters: {flops if flops is not None else 'N/A'}, Nparams: {nparams if nparams is not None else 'N/A'}")
             result = ExperimentResult(
                 iteration=i + 1,
                 accuracy=accuracies[i] if i < len(accuracies) else None,
@@ -263,7 +233,7 @@ class ResultsAnalyzer:
         import re
         import ast
 
-        iteration_pattern = re.compile(r'START TRAINING ITERATION (\d+)')
+        iteration_pattern = re.compile(r'ITERATION (\d+)')
         layer_pattern = re.compile(r'layer_x_block=(\d+)')
         chosen_point_pattern = re.compile(r'Chosen point:\s*(\{.*\})')
 
@@ -455,8 +425,8 @@ class ResultsAnalyzer:
         # print(f"  Valid results: {[r for r in valid_results]}")
         if not valid_results:
             return None
-        # return max(valid_results, key=lambda r: r.accuracy if r.accuracy is not None else float('-inf'))  # Best accuracy
-        return min(valid_results, key=lambda r: r.score if r.score is not None else float('inf'))  # Best score (lower is better)
+        return max(valid_results, key=lambda r: r.accuracy if r.accuracy is not None else float('-inf'))  # Best accuracy
+        # return min(valid_results, key=lambda r: r.score if r.score is not None else float('inf'))  # Best score (lower is better)
     
     def save_experiment_csv(self, output_csv: Path) -> bool:
         """
@@ -494,7 +464,7 @@ class ResultsAnalyzer:
                     config_keys = sorted([k for k in self.config.keys() if k not in fieldnames])
                     fieldnames.extend(config_keys)
                 
-                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=';')
                 writer.writeheader()
                 
                 for result in self.results:
@@ -593,7 +563,7 @@ def _compute_net_flops(hyperparams: Optional[Dict[str, Any]], dataset):
     reg = hyperparams.get("reg", False)
     residual = hyperparams.get("residual", False)
     nn = nn_cls(backend_cls(), dataset, da, reg, residual)
-    nn.build_network(hyperparams, hyperparams.get("layer_x_block", 2))
+    nn.build_network(hyperparams, hyperparams.get("layer_x_block", 1))
 
     return float(nn.flops), nn.nparams
 
@@ -725,7 +695,7 @@ def _calculate_hardware(exp_dir: Path) -> Optional[Tuple[float, float, float, st
             def __init__(self, layers: Dict[str, LayerSpec]):
                 self.layers = layers
 
-        hw_module = hardware_module(weight_cost=0.7)
+        hw_module = hardware_module(weight_cost=0.5)
         hw_module.update_state(_ModelSpecContainer(model_specs))
 
         latency = hw_module.latency
@@ -822,6 +792,37 @@ def analyze_all_experiments(parent_dir: Path, output_dir: Optional[Path] = None)
                         best_result.flops = recalculated_flops
                 except:
                     best_result.flops = 0
+            if COMPUTE_FLOPS and best_result.flops==0:
+                dataset_name = ResultsAnalyzer.config.get("dataset", "unknown").lower().replace("-", "")
+                dataset = TunerDataset()
+                if dataset_name == "cifar10":
+                    dataset.load_cifar_10()
+                elif dataset_name == "cifar100":
+                    dataset.load_cifar_100()
+                elif dataset_name == "mnist":
+                    dataset.load_mnist()
+                elif dataset_name == "cifar10_light" or dataset_name == "light_cifar" or dataset_name == "light":
+                    dataset.load_light_cifar()
+                elif dataset_name == "gesture":
+                    dataset.load_gesture()
+                elif "roigesture" in dataset_name:
+                    dataset.load_roi_gesture()
+                elif dataset_name == "tinyimagenet":
+                    dataset.load_tiny_imagenet()
+                elif dataset_name == "cca":
+                    dataset.load_cca()
+                elif dataset_name == "cim":
+                    dataset.load_cim()
+                else:
+                    print(
+                        f"Unknown dataset: {dataset_name}. Supported: cifar10, cifar100, mnist, light, gesture, roigesture_matrix, roigesture_coords, cca, cim.")
+                    exit(1)
+                try:
+                    best_result.flops, best_result.nparams = _compute_net_flops(best_result.hyperparams_list, dataset)
+                    print(
+                        f"  FLOPS recalculated from hyperparameters: {best_result.flops if best_result.flops is not None else 'N/A'}, Nparams: {best_result.nparams if best_result.nparams is not None else 'N/A'}")
+                except:
+                    print(f" FLOPS could not be calculated")
             if COMPUTE_HW and (any(value is None for value in [best_result.latency, best_result.hw_cost, best_result.hw_total_cost, best_result.hw_config])):
                 hw_metrics = _calculate_hardware(exp_dir)
                 if hw_metrics is not None:
@@ -871,7 +872,7 @@ def analyze_all_experiments(parent_dir: Path, output_dir: Optional[Path] = None)
                 extra_columns = sorted(col for col in all_columns if col not in base_columns)
                 fieldnames = [col for col in base_columns if col in all_columns] + extra_columns
 
-                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=";")
                 writer.writeheader()
                 
                 # Sort by score
