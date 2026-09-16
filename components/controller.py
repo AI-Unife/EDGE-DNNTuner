@@ -288,8 +288,8 @@ class controller:
             elif (len(self.modules.modules_obj) > 0) and self.modules.ready() and self.modules.all_zeros_weights():
                 _, _, opt_value = self.modules.optimiziation()
                 val_acc = self.scoreNN[1]
+                print(f"[DEBUG] Combined Score: {opt_value:.4f} (HW+FLOPs) and Validation Accuracy: {val_acc:.4f}")
                 self.score = float(opt_value) - (val_acc * self.acc_w)
-            
             else:
                 self.score = -float(self.scoreNN[1]) 
 

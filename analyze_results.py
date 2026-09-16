@@ -425,8 +425,8 @@ class ResultsAnalyzer:
         # print(f"  Valid results: {[r for r in valid_results]}")
         if not valid_results:
             return None
-        return max(valid_results, key=lambda r: r.accuracy if r.accuracy is not None else float('-inf'))  # Best accuracy
-        # return min(valid_results, key=lambda r: r.score if r.score is not None else float('inf'))  # Best score (lower is better)
+        # return max(valid_results, key=lambda r: r.accuracy if r.accuracy is not None else float('-inf'))  # Best accuracy
+        return min(valid_results, key=lambda r: r.score if r.score is not None else float('inf'))  # Best score (lower is better)
     
     def save_experiment_csv(self, output_csv: Path) -> bool:
         """
@@ -662,7 +662,7 @@ def _build_model_specs(model: Any) -> Dict[str, LayerSpec]:
     return specs
 
 
-def _calculate_hardware(exp_dir: Path) -> Optional[Tuple[float, float, float, str]]:
+def _calculate_hardware(exp_dir: Path, params: Dict = None, dataset = None) -> Optional[Tuple[float, float, float, str]]:
     """Estimate latency/cost/total_cost/config for exp_dir/Model/best-model.keras."""
     try:
         from tensorflow import keras
@@ -673,14 +673,27 @@ def _calculate_hardware(exp_dir: Path) -> Optional[Tuple[float, float, float, st
     model_path = exp_dir / "Model" / "best-model.keras"
     if not model_path.exists():
         print(f"  Model file not found for hardware estimate: {model_path}")
-        return None
+        model = None
 
     try:
         model = keras.models.load_model(model_path, compile=False)
     except Exception as e:
         print(f"  Error loading model for hardware estimate: {e}")
-        return None
+        model = None
 
+    if model is None and params is not None and dataset is not None:
+        print(f"  Model file not found for hardware estimate: {model_path}")
+        print("        rebuild model from best params")
+
+        from tensorflow_implementation import module_backend, neural_network
+        nn_cls = neural_network.NeuralNetwork
+        backend_cls = module_backend.ModuleBackend
+        da = params.get("da", False)
+        reg = params.get("reg", False)
+        residual = params.get("residual", False)
+        nn = nn_cls(backend_cls(), dataset, da, reg, residual)
+        nn.build_network(params, params.get("layer_x_block", 1))
+        model = nn.model.model
     model_specs = _build_model_specs(model)
     if not model_specs:
         print("  Hardware estimate skipped: no supported Conv2D/Dense layers found")
@@ -695,7 +708,7 @@ def _calculate_hardware(exp_dir: Path) -> Optional[Tuple[float, float, float, st
             def __init__(self, layers: Dict[str, LayerSpec]):
                 self.layers = layers
 
-        hw_module = hardware_module(weight_cost=0.5)
+        hw_module = hardware_module(weight_cost=0.3)
         hw_module.update_state(_ModelSpecContainer(model_specs))
 
         latency = hw_module.latency
@@ -783,6 +796,7 @@ def analyze_all_experiments(parent_dir: Path, output_dir: Optional[Path] = None)
         
         # Collect info for total CSV
         best_result = analyzer.get_best_result()
+        dataset = None
         if best_result:
             if best_result.flops is None:
                 try:
@@ -793,7 +807,7 @@ def analyze_all_experiments(parent_dir: Path, output_dir: Optional[Path] = None)
                 except:
                     best_result.flops = 0
             if COMPUTE_FLOPS and best_result.flops==0:
-                dataset_name = ResultsAnalyzer.config.get("dataset", "unknown").lower().replace("-", "")
+                dataset_name = analyzer.config.get("dataset", "unknown").lower().replace("-", "")
                 dataset = TunerDataset()
                 if dataset_name == "cifar10":
                     dataset.load_cifar_10()
@@ -824,7 +838,32 @@ def analyze_all_experiments(parent_dir: Path, output_dir: Optional[Path] = None)
                 except:
                     print(f" FLOPS could not be calculated")
             if COMPUTE_HW and (any(value is None for value in [best_result.latency, best_result.hw_cost, best_result.hw_total_cost, best_result.hw_config])):
-                hw_metrics = _calculate_hardware(exp_dir)
+                if dataset is None:
+                    dataset_name = analyzer.config.get("dataset", "unknown").lower().replace("-", "")
+                    dataset = TunerDataset()
+                    if dataset_name == "cifar10":
+                        dataset.load_cifar_10()
+                    elif dataset_name == "cifar100":
+                        dataset.load_cifar_100()
+                    elif dataset_name == "mnist":
+                        dataset.load_mnist()
+                    elif dataset_name == "cifar10_light" or dataset_name == "light_cifar" or dataset_name == "light":
+                        dataset.load_light_cifar()
+                    elif dataset_name == "gesture":
+                        dataset.load_gesture()
+                    elif "roigesture" in dataset_name:
+                        dataset.load_roi_gesture()
+                    elif dataset_name == "tinyimagenet":
+                        dataset.load_tiny_imagenet()
+                    elif dataset_name == "cca":
+                        dataset.load_cca()
+                    elif dataset_name == "cim":
+                        dataset.load_cim()
+                    else:
+                        print(
+                            f"Unknown dataset: {dataset_name}. Supported: cifar10, cifar100, mnist, light, gesture, roigesture_matrix, roigesture_coords, cca, cim.")
+                        exit(1)
+                hw_metrics = _calculate_hardware(exp_dir, best_result.hyperparams, dataset)
                 if hw_metrics is not None:
                     best_result.latency, best_result.hw_cost, best_result.hw_total_cost, best_result.hw_config = hw_metrics
             summary_row = {

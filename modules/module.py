@@ -181,6 +181,7 @@ class module:
                # accumulate values and weights from each module
                weights += [module.weight]
                values += [module.optimiziation_function()]
+               print(f"[DEBUG] Module: {self.modules_name[index]} | Weight: {module.weight} | Value: {values[-1]}")
 
         # Normalise the values of the weights dividing each of them
         # by the sum of all the accumulated weights

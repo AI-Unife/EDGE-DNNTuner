@@ -17,7 +17,9 @@ class hardware_module(common_interface):
     problems = ['out_range']
     
     #weight of the module for the final loss calculation
-    weight = 0.33
+    cfg = load_cfg()
+    weight = cfg.get("w_HW", 0.3)
+    print("HW module weight: " + str(weight))
 
     def __init__(self, weight_cost=None):
         # cost value per square millimeter, 10K / mm2
