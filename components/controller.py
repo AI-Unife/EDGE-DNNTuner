@@ -94,6 +94,7 @@ class controller:
         self.exploding_th = 100.0
         self.weight_flops: float = 0.0
         self.weight_latency: float = 0.0
+        self.acc_w = 1
         # Improvement checker + modules
         self.imp_checker = ImprovementChecker(self.db, self.lfi)
         self.modules = module(self.exp_cfg.mod_list)
@@ -107,8 +108,7 @@ class controller:
             weight_cost = self.modules.get_module("hardware_module").weight_cost
             self.latency_th = round((max_cost * weight_cost) + (max_latency * (1-weight_cost)), 4)
             self.weight_latency = self.exp_cfg.w_HW
-
-        self.acc_w = 1-(self.weight_flops + self.weight_latency)  # Remaining weight for accuracy in the combined score
+            self.acc_w = 1-(self.weight_flops + self.weight_latency)  # Remaining weight for accuracy in the combined score
         # Optimization objective bookkeeping
         self.best_score: float = 1e10 #float("inf")  # lower is better if we minimize
         self.convergence: bool = False
@@ -281,7 +281,11 @@ class controller:
             #     self.score = -float(q_acc) 
             #     quantizer.log_function()
             
-            if (len(self.modules.modules_obj) > 0) and self.modules.ready() and self.modules.all_zeros_weights():
+            if "flops_module" in self.exp_cfg.mod_list:
+                _, _, opt_value = self.modules.optimiziation()
+                val_acc = self.scoreNN[1]
+                self.score = -(abs(val_acc- opt_value))
+            elif (len(self.modules.modules_obj) > 0) and self.modules.ready() and self.modules.all_zeros_weights():
                 _, _, opt_value = self.modules.optimiziation()
                 val_acc = self.scoreNN[1]
                 self.score = float(opt_value) - (val_acc * self.acc_w)

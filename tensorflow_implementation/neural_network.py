@@ -210,7 +210,7 @@ class NeuralNetwork(BaseNeuralNetwork):
         if "hardware_module" in self.exp_cfg.mod_list:
             # Compute total latency cost
             from modules.loss.hardware_module import hardware_module
-            HW_module = hardware_module(weight_cost=0.7)
+            HW_module = hardware_module()
             HW_module.update_state(self.model)
             self.tot_latency_cost = HW_module.total_cost
 

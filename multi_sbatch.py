@@ -3,8 +3,8 @@ from itertools import product
 
 datasets_cifar = ['cifar10']
 optimizers = ['filtered', 'RS_ruled']
-seeds = [42, 7, 84] #123, 96, 
-weights = [0.5, 0.3]  # Example weights for flops and latency in the combined score
+seeds = [42, 7, 96] #123, 84, 
+weights = [0.3, 0.5, 0.7]  # Example weights for flops and latency in the combined score
 
 
 def generate_jobs():
