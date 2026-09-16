@@ -294,7 +294,7 @@ class NeuralNetwork(BaseNeuralNetwork):
 
         # --- Callbacks ---
         es = EarlyStopping(monitor="val_accuracy", min_delta=0.005, patience=30, verbose=1,
-                            mode="min", restore_best_weights=True)
+                            mode="maz", restore_best_weights=True)
         # --- Compile ---
         self.model.model.compile(loss="categorical_crossentropy", optimizer=opt, metrics=["accuracy"])
         
