@@ -1,4 +1,6 @@
 import importlib
+import time
+from typing import Dict
 from components.colors import colors
 import os
 import numpy as np
@@ -30,6 +32,9 @@ class module:
         self.modules_obj = []
         self.modules_name = []
         self.modules_ready = []
+        # per-active-module wall time for the current iteration (update_state +
+        # optimiziation_function), reset at the start of state(); see log_timing().
+        self.module_times: Dict[str, float] = {}
         self.load_modules()
 
     def get_module(self, name):
@@ -136,9 +141,15 @@ class module:
         """
         Update internal state of modules
         """
+        # Reset per-iteration module timing here: state() is called exactly once
+        # per training iteration, before optimiziation(), which adds to the same dict.
+        self.module_times = {}
         for index, module in enumerate(self.modules_obj):
+            name = self.modules_name[index]
+            t0 = time.perf_counter()
             module.update_state(*args)
-            
+            self.module_times[name] = self.module_times.get(name, 0.0) + (time.perf_counter() - t0)
+
             # if the number of facts defined internally by the module and
             # the number of values returned are different, an error occurs and
             # the model cannot be included in the prolog model.
@@ -179,8 +190,11 @@ class module:
            if self.modules_ready[index]:
 
                # accumulate values and weights from each module
+               name = self.modules_name[index]
+               t0 = time.perf_counter()
                weights += [module.weight]
                values += [module.optimiziation_function()]
+               self.module_times[name] = self.module_times.get(name, 0.0) + (time.perf_counter() - t0)
 
         # Normalise the values of the weights dividing each of them
         # by the sum of all the accumulated weights

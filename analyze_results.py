@@ -7,9 +7,15 @@ and the tuning pipeline, creating:
 2. A total CSV with the best result for each experiment
 
 Usage:
-    python analyze_results.py
+    python analyze_results.py [parent_dir] [output_dir] [--hw-weight W]
 
-The user will be asked to select the parent folder containing the experiments.
+Without arguments the user is asked to select the parent folder containing
+the experiments. --hw-weight sets hardware_module's weight_cost used to (re)compute
+best_latency/best_hw_cost/best_hw_total_cost/best_hw_config whenever they are
+missing — including for experiments whose mod_list never included
+hardware_module in the first place (default: 0.3). See also experiment_stats.py,
+which groups these summary rows by dataset/opt/module and computes mean/std
+across seeds, plus an accuracy-vs-HW-cost scatter plot.
 """
 
 import os
@@ -35,8 +41,8 @@ import nvdla.profiler as profiler
 from components.model_interface import LayerSpec, LayerTypes, Params
 from components.dataset import TunerDataset
 _EXCLUDED_CONFIG_KEYS = ["name", "verbose", "polarity", "created_at"]
-COMPUTE_FLOPS = False
-COMPUTE_HW = False
+COMPUTE_FLOPS = True
+COMPUTE_HW = True
 
 @dataclass
 class ExperimentResult:
@@ -53,15 +59,21 @@ class ExperimentResult:
     w_flops: Optional[float] = None
     hyperparams: Optional[Dict[str, Any]] = None
     score: Optional[float] = None  # Calculated as -accuracy if no modules are present
+    # From timing_report.csv (see components/controller.py's log_timing)
+    total_time: Optional[float] = None
+    search_time: Optional[float] = None
+    symbolic_time: Optional[float] = None
+    training_time: Optional[float] = None
+    module_times: Optional[Dict[str, float]] = None
 
 
 class ResultsAnalyzer:
     """Analyzer for experiment results"""
-    
+
     def __init__(self, experiment_dir: str):
         """
         Initialize the analyzer.
-        
+
         Args:
             experiment_dir: Experiment folder containing algorithm_logs/
         """
@@ -71,28 +83,28 @@ class ResultsAnalyzer:
         self.has_flops_module = False
         self.has_hardware_module = False
         self.config: Dict[str, Any] = {}  # Experiment configuration
-        
+
     def load_results(self) -> bool:
         """
         Load all results from log files.
-        
+
         Returns:
             True if logs were loaded successfully, False otherwise
         """
         # Load config.yaml file
         self._load_config_yaml()
         print("[INFO] Analyzing results...")
-        
+
         if not self.algorithm_logs_dir.exists():
             print(f"  algorithm_logs folder not found in {self.experiment_dir}")
             return False
-        
+
         # Load accuracies
         accuracies = self._load_accuracies()
         if not accuracies:
             print(f"  No acc_report.txt file found")
             return False
-        
+
         scores = self._load_scores()
         has_score_file = bool(scores)
         if has_score_file:
@@ -102,55 +114,30 @@ class ResultsAnalyzer:
 
         # Load hyperparameters
         hyperparams_list = self._load_hyperparams()
-        
+
         # Load FLOPS data
         flops_data = self._load_flops_data()
         if flops_data:
             self.has_flops_module = True
-        
+
         # Load hardware data
         hw_data = self._load_hardware_data()
         if hw_data:
             self.has_hardware_module = True
+
+        # Load per-iteration timing data (see components/controller.py's log_timing)
+        timing_map = self._load_timing_data()
 
         # Combine the data
         max_iterations = max(
             len(accuracies),
             len(hyperparams_list),
             len(flops_data) if flops_data else 0,
-            len(hw_data) if hw_data else 0
+            len(hw_data) if hw_data else 0,
+            max(timing_map.keys()) if timing_map else 0,
         )
-        dataset_name = self.config.get("dataset", "unknown")
-        dataset = TunerDataset()
-        if COMPUTE_FLOPS:
-            if dataset_name == "cifar10":
-                dataset.load_cifar_10()
-            elif dataset_name == "cifar100":
-                dataset.load_cifar_100()
-            elif dataset_name == "mnist":
-                dataset.load_mnist()
-            elif dataset_name == "cifar10_light" or dataset_name == "light_cifar" or dataset_name == "light":
-                dataset.load_light_cifar()
-            elif dataset_name == "gesture":
-                dataset.load_gesture()
-            elif "roigesture" in dataset_name:
-                dataset.load_roi_gesture()
-            elif dataset_name == "tinyimagenet":
-                dataset.load_tiny_imagenet()
-            elif dataset_name == "cca":
-                dataset.load_cca()
-            elif dataset_name == "cim":
-                dataset.load_cim()
-            else:
-                print(
-                    f"Unknown dataset: {dataset_name}. Supported: cifar10, cifar100, mnist, light, gesture, roigesture_matrix, roigesture_coords, cca, cim.")
-                exit(1)
-
         for i in range(max_iterations):
-            if COMPUTE_FLOPS and (flops_data is None or len(flops_data[i]) == 1):
-                flops, nparams = _compute_net_flops(hyperparams_list[i], dataset)
-                flops_data[i] = (nparams, flops)
-                print(f"  Iteration {i+1}: FLOPS recalculated from hyperparameters: {flops if flops is not None else 'N/A'}, Nparams: {nparams if nparams is not None else 'N/A'}")
+            timing_row = timing_map.get(i + 1)
             result = ExperimentResult(
                 iteration=i + 1,
                 accuracy=accuracies[i] if i < len(accuracies) else None,
@@ -163,22 +150,27 @@ class ResultsAnalyzer:
                 score=scores[i] if scores and i < len(scores) else None,
                 w_flops=self.config.get("w_flops") if self.has_flops_module else None,
                 hyperparams=hyperparams_list[i] if i < len(hyperparams_list) else None,
+                total_time=self._safe_float(timing_row.get("total_time")) if timing_row else None,
+                search_time=self._safe_float(timing_row.get("search_time")) if timing_row else None,
+                symbolic_time=self._safe_float(timing_row.get("symbolic_time")) if timing_row else None,
+                training_time=self._safe_float(timing_row.get("training_time")) if timing_row else None,
+                module_times=self._extract_module_times(timing_row) if timing_row else None,
             )
-            
+
             # Calculate score: -accuracy if no modules are present
             if result.score is None:
                 result.score = self._recompute_score(result)
 
             self.results.append(result)
-        
+
         return True
-    
+
     def _load_accuracies(self) -> List[Optional[float]]:
         """Load accuracies from acc_report.txt file"""
         acc_file = self.algorithm_logs_dir / "acc_report.txt"
         if not acc_file.exists():
             return []
-        
+
         accuracies = []
         try:
             with open(acc_file, 'r') as f:
@@ -191,15 +183,15 @@ class ResultsAnalyzer:
         except Exception as e:
             print(f"  Error reading {acc_file}: {e}")
             return []
-        
+
         return accuracies
-    
+
     def _load_scores(self) -> List[Optional[float]]:
         """Load scores from score_report.txt file"""
         score_file = self.algorithm_logs_dir / "score_report.txt"
         if not score_file.exists():
             return []
-        
+
         scores = []
         try:
             with open(score_file, 'r') as f:
@@ -212,7 +204,7 @@ class ResultsAnalyzer:
         except Exception as e:
             print(f"  Error reading {score_file}: {e}")
             return []
-        
+
         return scores
 
 
@@ -221,7 +213,7 @@ class ResultsAnalyzer:
         import re
         iteration_pattern = re.compile(r'START TRAINING ITERATION (\d+)')
         layer_pattern = re.compile(r'layer_x_block=(\d+)')
-        
+
 
         results = {}
         current_iter = None
@@ -251,8 +243,8 @@ class ResultsAnalyzer:
             raise ValueError(f"Più file .out trovati: {out_files}")
 
         return str(out_files[0])
-    
-    
+
+
     def _extract_hyperparams_per_iteration(self, input_file):
         """
         Estrae, per ogni iterazione, il dizionario di hyperparametri (dalla riga
@@ -263,7 +255,7 @@ class ResultsAnalyzer:
         import re
         import ast
 
-        iteration_pattern = re.compile(r'START TRAINING ITERATION (\d+)')
+        iteration_pattern = re.compile(r'ITERATION (\d+)')
         layer_pattern = re.compile(r'layer_x_block=(\d+)')
         chosen_point_pattern = re.compile(r'Chosen point:\s*(\{.*\})')
 
@@ -330,7 +322,7 @@ class ResultsAnalyzer:
         hyperparams = [hp_map.get(i) for i in range(max_iter + 1)]
 
         return hyperparams
-    
+
     # def _load_hyperparams(self) -> List[Optional[Dict[str, Any]]]:
     #     """Load hyperparameters from hyper-neural.txt file"""
     #     hp_file = self.algorithm_logs_dir / "hyper-neural.txt"
@@ -374,9 +366,9 @@ class ResultsAnalyzer:
     #     except Exception as e:
     #         print(f"  Error reading {hp_file}: {e}")
     #         return []
-        
+
     #     return hyperparams
-    
+
     def _load_flops_data(self) -> Optional[List[Tuple[float, float]]]:
         """Load FLOPS data from flops_report.txt file"""
         flops_file = self.algorithm_logs_dir / "flops_report.txt"
@@ -401,15 +393,15 @@ class ResultsAnalyzer:
         except Exception as e:
             print(f"  Error reading {flops_file}: {e}")
             return None
-        
+
         return flops_data if flops_data else None
-    
+
     def _load_hardware_data(self) -> Optional[List[Tuple[float, float, float, str]]]:
         """Load hardware data from hardware_report.txt file"""
         hw_file = self.algorithm_logs_dir / "hardware_report.txt"
         if not hw_file.exists():
             return None
-        
+
         hw_data = []
         try:
             with open(hw_file, 'r') as f:
@@ -428,9 +420,32 @@ class ResultsAnalyzer:
         except Exception as e:
             print(f"  Error reading {hw_file}: {e}")
             return None
-        
+
         return hw_data if hw_data else None
-    
+
+    def _load_timing_data(self) -> Dict[int, Dict[str, str]]:
+        """Load algorithm_logs/timing_report.csv (see controller.log_timing), keyed
+        by iteration -- unlike the other per-iteration logs this one already carries
+        an explicit iteration number, since a failed-then-retried optimizer step can
+        skip one (see symbolic_tuner.run_optimization)."""
+        timing_file = self.algorithm_logs_dir / "timing_report.csv"
+        if not timing_file.exists():
+            return {}
+        try:
+            with open(timing_file, newline="") as f:
+                return {int(row["iteration"]): row for row in csv.DictReader(f)}
+        except Exception as e:
+            print(f"  Error reading {timing_file}: {e}")
+            return {}
+
+    def _extract_module_times(self, timing_row: Dict[str, str]) -> Optional[Dict[str, float]]:
+        """{module_name: seconds} from a timing_report.csv row's module_time_<name> columns."""
+        module_times = {}
+        for key, value in timing_row.items():
+            if key.startswith("module_time_") and value not in (None, ""):
+                module_times[key[len("module_time_"):]] = self._safe_float(value)
+        return module_times or None
+
     def _load_config_yaml(self) -> None:
         """Load configuration from config.yaml file"""
         config_file = self.experiment_dir / "config.yaml"
@@ -438,7 +453,7 @@ class ResultsAnalyzer:
             print(f"  config.yaml file not found in {self.experiment_dir}")
             self.config = {}
             return
-        
+
         try:
             with open(config_file, 'r') as f:
                 os.environ["EXP_CONFIG"] = str(config_file.resolve())
@@ -449,52 +464,94 @@ class ResultsAnalyzer:
 
     def get_best_result(self) -> Optional[ExperimentResult]:
         """Return the best result (highest accuracy)"""
-        valid_results = [r for r in self.results if r.accuracy is not None and r.hyperparams['activation'] in ['relu', 'selu'] and r.nparams is not None and r.nparams <= 300000]
+        # valid_results = [r for r in self.results if r.accuracy is not None and r.hyperparams['activation'] in ['relu', 'selu'] and r.nparams is not None and r.nparams <= 300000]
+        valid_results = [r for r in self.results if r.accuracy is not None]
         # print(f"  Found {len(valid_results)} valid results with accuracy and hyperparams")
         # print(f"  Valid results: {[r for r in valid_results]}")
         if not valid_results:
             return None
-        return max(valid_results, key=lambda r: r.accuracy if r.accuracy is not None else float('-inf'))  # Best accuracy
-    
+        # return max(valid_results, key=lambda r: r.accuracy if r.accuracy is not None else float('-inf'))  # Best accuracy
+        return min(valid_results, key=lambda r: r.score if r.score is not None else float('inf'))  # Best score (lower is better)
+
+    def get_timing_summary(self) -> Dict[str, Any]:
+        """Aggregate this experiment's timing_report.csv rows into a handful of
+        scalars comparable ACROSS experiments regardless of how many iterations
+        each ran: the mean per-iteration total/search/symbolic/training time
+        (see components/controller.py's log_timing for what each covers), the
+        mean time spent per iteration inside each active module, and
+        total_time_sum -- the whole tuning run's wall-clock duration."""
+
+        def _mean(values: List[Optional[float]]) -> Optional[float]:
+            values = [v for v in values if v is not None]
+            return sum(values) / len(values) if values else None
+
+        totals = [r.total_time for r in self.results]
+        summary = {
+            "mean_total_time": _mean(totals),
+            "total_time_sum": sum(v for v in totals if v is not None) or None,
+            "mean_search_time": _mean(r.search_time for r in self.results),
+            "mean_symbolic_time": _mean(r.symbolic_time for r in self.results),
+            "mean_training_time": _mean(r.training_time for r in self.results),
+        }
+
+        module_names = set()
+        for r in self.results:
+            if r.module_times:
+                module_names.update(r.module_times.keys())
+        for name in module_names:
+            summary[f"mean_module_time_{name}"] = _mean(
+                r.module_times.get(name) if r.module_times else None for r in self.results
+            )
+
+        return summary
+
     def save_experiment_csv(self, output_csv: Path) -> bool:
         """
         Save the experiment results to CSV.
-        
+
         Args:
             output_csv: Path of the output CSV file
-            
+
         Returns:
             True if save was successful
         """
         if not self.results:
             print(f"  No results to save")
             return False
-        
+
         try:
             with open(output_csv, 'w', newline='') as f:
                 # Determine columns dynamically
                 fieldnames = [
                     'iteration', 'accuracy', 'score',
                     'nparams', 'flops',
-                    'latency', 'hw_cost', 'hw_total_cost', 'hw_config'
+                    'latency', 'hw_cost', 'hw_total_cost', 'hw_config',
+                    'total_time', 'search_time', 'symbolic_time', 'training_time',
                 ]
-                
+
                 # Add fields for hyperparameters
                 all_hp_keys = set()
                 for result in self.results:
                     if result.hyperparams:
                         all_hp_keys.update(result.hyperparams.keys())
-                
+
                 fieldnames.extend(sorted(all_hp_keys))
-                
+
+                # Add fields for per-module timing
+                all_module_time_keys = set()
+                for result in self.results:
+                    if result.module_times:
+                        all_module_time_keys.update(result.module_times.keys())
+                fieldnames.extend(f"module_time_{k}" for k in sorted(all_module_time_keys))
+
                 # Add fields from config.yaml
                 if self.config:
                     config_keys = sorted([k for k in self.config.keys() if k not in fieldnames])
                     fieldnames.extend(config_keys)
-                
-                writer = csv.DictWriter(f, fieldnames=fieldnames)
+
+                writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=';')
                 writer.writeheader()
-                
+
                 for result in self.results:
                     row = {
                         'iteration': result.iteration,
@@ -506,20 +563,29 @@ class ResultsAnalyzer:
                         'hw_cost': result.hw_cost,
                         'hw_total_cost': result.hw_total_cost,
                         'hw_config': result.hw_config,
+                        'total_time': result.total_time,
+                        'search_time': result.search_time,
+                        'symbolic_time': result.symbolic_time,
+                        'training_time': result.training_time,
                     }
-                    
+
                     # Add hyperparameters
                     if result.hyperparams:
                         for key in all_hp_keys:
                             row[key] = result.hyperparams.get(key, '')
-                    
+
+                    # Add per-module timing
+                    if result.module_times:
+                        for key in all_module_time_keys:
+                            row[f"module_time_{key}"] = result.module_times.get(key, '')
+
                     # Add data from config.yaml
                     for key, value in self.config.items():
                         if key not in row:
                             row[key] = value
-                    
+
                     writer.writerow(row)
-            
+
             return True
         except Exception as e:
             print(f"  Error saving CSV: {e}")
@@ -537,7 +603,7 @@ class ResultsAnalyzer:
     def _recompute_score(self, result: ExperimentResult) -> Optional[float]:
         """Recompute score when score_report is missing, following controller training logic."""
         PENALTY_SCORE = 1e10
-        acc_w = 1 - (result.w_flops if result.w_flops is not None else 0.3)
+        acc_w = 1 # - (result.w_flops if result.w_flops is not None else 0.3)
 
         accuracy = self._safe_float(result.accuracy)
         nparams = self._safe_float(result.nparams)
@@ -566,12 +632,14 @@ class ResultsAnalyzer:
                 # flops_module.optimiziation_function(): nparams / nparams_th - 1
                 opt_value += w_flops * ((nparams / nparams_th) - 1.0)
                 has_opt_term = True
+                acc_w-= w_flops
 
         if use_hw_module and hw_total_cost is not None:
             w_hw = self._safe_float(self.config.get("w_HW", 0.33)) or 0.33
             # hardware_module.optimiziation_function(): total_cost
             opt_value += w_hw * hw_total_cost
             has_opt_term = True
+            acc_w-= w_hw
 
         if has_opt_term:
             return float(opt_value - (accuracy * acc_w))
@@ -591,7 +659,7 @@ def _compute_net_flops(hyperparams: Optional[Dict[str, Any]], dataset):
     reg = hyperparams.get("reg", False)
     residual = hyperparams.get("residual", False)
     nn = nn_cls(backend_cls(), dataset, da, reg, residual)
-    nn.build_network(hyperparams, hyperparams.get("layer_x_block", 2))
+    nn.build_network(hyperparams, hyperparams.get("layer_x_block", 1))
 
     return float(nn.flops), nn.nparams
 
@@ -690,8 +758,15 @@ def _build_model_specs(model: Any) -> Dict[str, LayerSpec]:
     return specs
 
 
-def _calculate_hardware(exp_dir: Path) -> Optional[Tuple[float, float, float, str]]:
-    """Estimate latency/cost/total_cost/config for exp_dir/Model/best-model.keras."""
+def _calculate_hardware(exp_dir: Path, params: Dict = None, dataset = None,
+                         weight_cost: float = 0.3) -> Optional[Tuple[float, float, float, str]]:
+    """Estimate latency/cost/total_cost/config for exp_dir/Model/best-model.keras.
+
+    weight_cost: passed straight to hardware_module(weight_cost=...) — how much
+    manufacturing cost weighs against latency in the total_cost figure. Lets a
+    caller ask "what would the HW cost be if hardware_module HAD been used with
+    weight W", even for an experiment whose mod_list never included it.
+    """
     try:
         from tensorflow import keras
     except Exception as e:
@@ -701,13 +776,27 @@ def _calculate_hardware(exp_dir: Path) -> Optional[Tuple[float, float, float, st
     model_path = exp_dir / "Model" / "best-model.keras"
     if not model_path.exists():
         print(f"  Model file not found for hardware estimate: {model_path}")
-        return None
+        model = None
 
     try:
         model = keras.models.load_model(model_path, compile=False)
     except Exception as e:
         print(f"  Error loading model for hardware estimate: {e}")
-        return None
+        model = None
+
+    if model is None and params is not None and dataset is not None:
+        print(f"  Model file not found for hardware estimate: {model_path}")
+        print("        rebuild model from best params")
+
+        from tensorflow_implementation import module_backend, neural_network
+        nn_cls = neural_network.NeuralNetwork
+        backend_cls = module_backend.ModuleBackend
+        da = params.get("da", False)
+        reg = params.get("reg", False)
+        residual = params.get("residual", False)
+        nn = nn_cls(backend_cls(), dataset, da, reg, residual)
+        nn.build_network(params, params.get("layer_x_block", 1))
+        model = nn.model.model
 
     model_specs = _build_model_specs(model)
     if not model_specs:
@@ -723,7 +812,7 @@ def _calculate_hardware(exp_dir: Path) -> Optional[Tuple[float, float, float, st
             def __init__(self, layers: Dict[str, LayerSpec]):
                 self.layers = layers
 
-        hw_module = hardware_module(weight_cost=0.7)
+        hw_module = hardware_module(weight_cost=weight_cost)
         hw_module.update_state(_ModelSpecContainer(model_specs))
 
         latency = hw_module.latency
@@ -743,19 +832,19 @@ def _calculate_hardware(exp_dir: Path) -> Optional[Tuple[float, float, float, st
 def select_parent_directory() -> Optional[Path]:
     """
     Ask the user to select the parent folder containing the experiments.
-    
+
     Returns:
         Path of the selected folder or None if cancelled
     """
     if TKINTER_AVAILABLE:
         root = tk.Tk()
         root.withdraw()  # Hide the main window
-        
+
         directory = filedialog.askdirectory(
             title="Select the parent folder containing the experiments",
             initialdir=os.path.expand_user("~")
         )
-        
+
         return Path(directory) if directory else None
     else:
         # Fallback: ask via command line
@@ -766,93 +855,158 @@ def select_parent_directory() -> Optional[Path]:
         return None
 
 
-def analyze_all_experiments(parent_dir: Path, output_dir: Optional[Path] = None):
+def _load_dataset_for(dataset_name: str) -> TunerDataset:
+    """Load a TunerDataset by the config.yaml 'dataset' name (lowercased, dash-stripped)."""
+    dataset = TunerDataset()
+    loaders = {
+        "cifar10": dataset.load_cifar_10,
+        "cifar100": dataset.load_cifar_100,
+        "mnist": dataset.load_mnist,
+        "cifar10_light": dataset.load_light_cifar,
+        "light_cifar": dataset.load_light_cifar,
+        "light": dataset.load_light_cifar,
+        "gesture": dataset.load_gesture,
+        "tinyimagenet": dataset.load_tiny_imagenet,
+        "cca": dataset.load_cca,
+        "cim": dataset.load_cim,
+    }
+    if "roigesture" in dataset_name:
+        dataset.load_roi_gesture()
+    elif dataset_name in loaders:
+        loaders[dataset_name]()
+    else:
+        print(f"Unknown dataset: {dataset_name}. Supported: cifar10, cifar100, mnist, light, gesture, "
+              f"roigesture_matrix, roigesture_coords, cca, cim.")
+        exit(1)
+    return dataset
+
+
+def analyze_experiment(exp_dir: Path, exp_csv: Optional[Path] = None,
+                        hw_weight: Optional[float] = None) -> Optional[Dict[str, Any]]:
+    """
+    Analyze a single experiment directory: load its logs, save its per-iteration
+    CSV, and return the summary row for its best iteration (or None if no valid
+    results were found).
+
+    Args:
+        exp_dir: Experiment folder containing algorithm_logs/.
+        exp_csv: Where to save the per-iteration CSV (default: exp_dir/<name>_results.csv).
+        hw_weight: weight_cost to use when (re)computing HW metrics — applied
+            whenever latency/hw_cost/hw_total_cost/hw_config are missing, which
+            includes experiments whose mod_list never included hardware_module
+            (lets a caller ask "what would the HW cost have been at weight W").
+            Default 0.3, matching hardware_module's own historical default.
+    """
+    hw_weight = 0.3 if hw_weight is None else hw_weight
+    print(f"📈 Analyzing: {exp_dir.name}")
+
+    analyzer = ResultsAnalyzer(exp_dir)
+    if not analyzer.load_results():
+        return None
+
+    if exp_csv is None:
+        exp_csv = exp_dir / f"{exp_dir.name}_results.csv"
+    if analyzer.save_experiment_csv(exp_csv):
+        print(f"  CSV saved: {exp_csv.name}")
+
+    best_result = analyzer.get_best_result()
+    if not best_result:
+        print(f"  No valid results found\n")
+        return None
+
+    dataset = None
+    if best_result.flops is None:
+        try:
+            recalculated_flops = _calculate_flops(exp_dir)
+            print(f"  FLOPS recalculated from model: {recalculated_flops if recalculated_flops is not None else 'N/A'}")
+            if recalculated_flops is not None:
+                best_result.flops = recalculated_flops
+        except:
+            best_result.flops = 0
+    if COMPUTE_FLOPS and best_result.flops == 0:
+        dataset_name = analyzer.config.get("dataset", "unknown").lower().replace("-", "")
+        dataset = _load_dataset_for(dataset_name)
+        try:
+            best_result.flops, best_result.nparams = _compute_net_flops(best_result.hyperparams_list, dataset)
+            print(
+                f"  FLOPS recalculated from hyperparameters: {best_result.flops if best_result.flops is not None else 'N/A'}, Nparams: {best_result.nparams if best_result.nparams is not None else 'N/A'}")
+        except:
+            print(f" FLOPS could not be calculated")
+    if COMPUTE_HW and (any(value is None for value in [best_result.latency, best_result.hw_cost, best_result.hw_total_cost, best_result.hw_config])):
+        if dataset is None:
+            dataset_name = analyzer.config.get("dataset", "unknown").lower().replace("-", "")
+            dataset = _load_dataset_for(dataset_name)
+        hw_metrics = _calculate_hardware(exp_dir, best_result.hyperparams, dataset, weight_cost=hw_weight)
+        if hw_metrics is not None:
+            best_result.latency, best_result.hw_cost, best_result.hw_total_cost, best_result.hw_config = hw_metrics
+
+    summary_row = {
+        'experiment': exp_dir.name,
+        'best_iteration': best_result.iteration,
+        'best_accuracy': best_result.accuracy,
+        'best_score': best_result.score,
+        'best_nparams': best_result.nparams,
+        'best_flops': best_result.flops,
+        'best_latency': best_result.latency,
+        'best_hw_cost': best_result.hw_cost,
+        'best_hw_total_cost': best_result.hw_total_cost,
+        'best_hw_config': best_result.hw_config,
+        'hw_weight_used': hw_weight,
+    }
+    summary_row.update(analyzer.get_timing_summary())
+
+    # Add data from config.yaml
+    for key, value in analyzer.config.items():
+        if key not in _EXCLUDED_CONFIG_KEYS:
+            summary_row[f'{key}'] = value
+
+    if best_result.iteration is not None:
+        acc_str = f"{best_result.accuracy:.4f}" if best_result.accuracy is not None else "N/A"
+        score_str = f"{best_result.score:.4f}" if best_result.score is not None else "N/A"
+        print(f"  Best result: iteration {best_result.iteration}, "
+              f"accuracy={acc_str}, score={score_str}\n")
+    else:
+        print(" No valid best result\n")
+
+    return summary_row
+
+
+def analyze_all_experiments(parent_dir: Path, output_dir: Optional[Path] = None,
+                             hw_weight: Optional[float] = None):
     """
     Analyze all experiments in the parent folder.
-    
+
     Args:
         parent_dir: Parent folder containing the experiments
         output_dir: Output folder (default: parent_dir)
+        hw_weight: see analyze_experiment.
     """
     if output_dir is None:
         output_dir = parent_dir
-    
+
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Find all subfolders with algorithm_logs
     experiments = []
     for item in parent_dir.iterdir():
         if item.is_dir() and (item / "algorithm_logs").exists():
             experiments.append(item)
-    
+
     if not experiments:
         print(f"No experiments found in {parent_dir}")
         return
-    
+
     print(f"\nFound {len(experiments)} experiments\n")
-    
+
     # Analyze each experiment
     summary_data = []
-    
+
     for exp_dir in sorted(experiments):
-        print(f"📈 Analyzing: {exp_dir.name}")
-        
-        analyzer = ResultsAnalyzer(exp_dir)
-        if not analyzer.load_results():
-            continue
-        
-        # Save CSV for this experiment
-        if output_dir != parent_dir:
-            exp_csv = output_dir / f"{exp_dir.name}_results.csv"
-        else:
-            exp_csv = exp_dir / f"{exp_dir.name}_results.csv"
-        if analyzer.save_experiment_csv(exp_csv):
-            print(f"  CSV saved: {exp_csv.name}")
-        
-        # Collect info for total CSV
-        best_result = analyzer.get_best_result()
-        if best_result:
-            if best_result.flops is None:
-                try:
-                    recalculated_flops = _calculate_flops(exp_dir)
-                    print(f"  FLOPS recalculated from model: {recalculated_flops if recalculated_flops is not None else 'N/A'}")
-                    if recalculated_flops is not None:
-                        best_result.flops = recalculated_flops
-                except:
-                    best_result.flops = 0
-            if COMPUTE_HW and (any(value is None for value in [best_result.latency, best_result.hw_cost, best_result.hw_total_cost, best_result.hw_config])):
-                hw_metrics = _calculate_hardware(exp_dir)
-                if hw_metrics is not None:
-                    best_result.latency, best_result.hw_cost, best_result.hw_total_cost, best_result.hw_config = hw_metrics
-            summary_row = {
-                'experiment': exp_dir.name,
-                'best_iteration': best_result.iteration,
-                'best_accuracy': best_result.accuracy,
-                'best_score': best_result.score,
-                'best_nparams': best_result.nparams,
-                'best_flops': best_result.flops,
-                'best_latency': best_result.latency,
-                'best_hw_cost': best_result.hw_cost,
-                'best_hw_total_cost': best_result.hw_total_cost,
-                'best_hw_config': best_result.hw_config,
-            }
-            
-            # Add data from config.yaml with prefix 'config_'
-            for key, value in analyzer.config.items():
-                if key not in _EXCLUDED_CONFIG_KEYS:
-                    summary_row[f'{key}'] = value
-            
+        exp_csv = (output_dir if output_dir != parent_dir else exp_dir) / f"{exp_dir.name}_results.csv"
+        summary_row = analyze_experiment(exp_dir, exp_csv=exp_csv, hw_weight=hw_weight)
+        if summary_row is not None:
             summary_data.append(summary_row)
-            if best_result.iteration is not None:
-                acc_str = f"{best_result.accuracy:.4f}" if best_result.accuracy is not None else "N/A"
-                score_str = f"{best_result.score:.4f}" if best_result.score is not None else "N/A"
-                print(f"  Best result: iteration {best_result.iteration}, "
-                    f"accuracy={acc_str}, score={score_str}\n")
-            else:
-                print(" No valid best result\n")
-        else:
-            print(f"  No valid results found\n")
-    
+
     # Save total CSV
     if summary_data:
         summary_csv = output_dir / "summary_best_results.csv"
@@ -869,7 +1023,7 @@ def analyze_all_experiments(parent_dir: Path, output_dir: Optional[Path] = None)
                 extra_columns = sorted(col for col in all_columns if col not in base_columns)
                 fieldnames = [col for col in base_columns if col in all_columns] + extra_columns
 
-                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=";")
                 writer.writeheader()
                 
                 # Sort by score
@@ -889,18 +1043,27 @@ def main():
     print("  EXPERIMENT RESULTS ANALYZER - Symbolic DNN Tuner")
     print("="*70 + "\n")
     
+    # --hw-weight can appear anywhere among the batch-mode args; pull it out
+    # before the positional parent/output dirs are read.
+    argv = sys.argv[1:]
+    hw_weight = None
+    if "--hw-weight" in argv:
+        idx = argv.index("--hw-weight")
+        hw_weight = float(argv[idx + 1])
+        del argv[idx:idx + 2]
+
     # Check if arguments have been passed
-    if len(sys.argv) > 1:
+    if len(argv) > 0:
         # Batch mode: use command line arguments
-        parent_dir = Path(sys.argv[1])
+        parent_dir = Path(argv[0])
         if not parent_dir.exists():
             print(f"Folder not found: {parent_dir}")
             return
-        
-        output_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else None
+
+        output_dir = Path(argv[1]) if len(argv) > 1 else None
         if output_dir and not output_dir.exists():
             output_dir.mkdir(parents=True, exist_ok=True)
-        
+
         print(f"Input folder: {parent_dir}")
         if output_dir:
             print(f"Output folder: {output_dir}\n")
@@ -941,7 +1104,7 @@ def main():
             output_dir = None
     
     # Analyze experiments
-    analyze_all_experiments(parent_dir, output_dir)
+    analyze_all_experiments(parent_dir, output_dir, hw_weight=hw_weight)
     
     print("\n" + "="*70)
     print("  Analysis completed!")

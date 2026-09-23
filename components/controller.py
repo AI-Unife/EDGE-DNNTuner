@@ -1,4 +1,5 @@
 import os
+import csv
 from typing import Callable, Optional, Any, Dict, List, Tuple
 import numpy as np
 
@@ -467,5 +468,40 @@ class controller:
             # flops = 0.0
             f.write(str(params) + " " + str(flops) + "\n")
             f.close()
-        
+
+    def log_timing(self, total_time: float, search_time: float,
+                    symbolic_time: float, training_time: float) -> None:
+        """
+        Append one row to algorithm_logs/timing_report.csv for this iteration:
+          - total_time: whole outer-loop pass (search + training + symbolic engine).
+          - search_time: the optimizer alone (gp_minimize/RandomSearch call minus
+            training_time), i.e. time spent choosing/fitting, not evaluating.
+          - training_time: the objective function itself (build_network + nn.training
+            + module state/optimization calls + logging) -- module_time_<name> below
+            is the portion of this spent inside each active module specifically.
+          - symbolic_time: the ctrl.diagnosis() call (symbolic reasoning engine).
+        Assumes exactly one training() call per outer-loop pass; on the rare
+        optimizer-retry path (see symbolic_tuner.run_optimization) two training()
+        calls can happen in one pass, in which case this logs only the second.
+        """
+        module_cols = [f"module_time_{name}" for name in self.modules.modules_name]
+        fieldnames = ["iteration", "total_time", "search_time", "symbolic_time", "training_time"] + module_cols
+        row = {
+            "iteration": self.iter,
+            "total_time": total_time,
+            "search_time": search_time,
+            "symbolic_time": symbolic_time,
+            "training_time": training_time,
+        }
+        for name in self.modules.modules_name:
+            row[f"module_time_{name}"] = self.modules.module_times.get(name, "")
+
+        log_path = f"{self.exp_cfg.name}/algorithm_logs/timing_report.csv"
+        write_header = not os.path.exists(log_path)
+        with open(log_path, "a", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=fieldnames)
+            if write_header:
+                w.writeheader()
+            w.writerow(row)
+
 
