@@ -17,14 +17,14 @@ class hardware_module(common_interface):
     problems = ['out_range']
     
     #weight of the module for the final loss calculation
-    weight = 0.33
+    cfg = load_cfg()
+    weight = cfg.get("w_HW", 0.3)
+    print("HW module weight: " + str(weight))
 
-    def __init__(self, weight_cost: float = 0.7):
+    def __init__(self, weight_cost=None):
         # cost value per square millimeter, 10K / mm2
         self.cost_par = 10000
         # attribute indicating how much cost weighs against latency value
-        self.weight_cost = weight_cost
-        print(colors.OKBLUE, f"|  --------- INITIALIZING HARDWARE MODULE WITH COST WEIGHT {self.weight_cost}  -------  |\n", colors.ENDC)
         # max latency value in second 
         self.max_latency = 0.008 #120FPS,
         # max manifacturing cost value
@@ -37,10 +37,12 @@ class hardware_module(common_interface):
                       {'name': "nv_small256", 'path': "nv_small256_fp32.yaml", 'area': 3.091},
                       {'name': "nv_large", 'path': "nv_large2048_fp32.yaml", 'area': 3.809}]
                       
+        self.weight_cost = weight_cost if weight_cost is not None else self.cfg.get("omega", 0.5)
+        print(colors.OKBLUE, f"|  --------- INITIALIZING HARDWARE MODULE WITH COST WEIGHT {self.weight_cost}  -------  |\n", colors.ENDC)
         # init list of available configurations to an empty dict
         self.nvdla = {}
         self.specs_dir = Path(__file__).parent.parent.parent.joinpath('nvdla').joinpath('specs').as_posix() + "/"
-        
+
         # iterate over each configuration
         for config in nvdla_list:
             if os.path.exists(self.specs_dir + config['path']):
@@ -55,7 +57,7 @@ class hardware_module(common_interface):
             else:
                 print(colors.FAIL, f"|  --------- {config['name']} CONFIGURATION FILE DOESN'T EXIST  -------  |\n", colors.ENDC)
                 print(self.specs_dir + config['path'])
-        
+
         if self.nvdla == {}:
             raise ModuleNotFoundError("No NVDLA configuration found")
 

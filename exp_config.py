@@ -29,8 +29,9 @@ class ConfigSchema:
     seed: int = 42                               # Random seed
     quantization: bool = False                   # Quantize the network
     verbose: int = 2                             # Verbosity level (0: silent, 1: space, 2: space+model)
-    w_flops: float = 0.33                        # Weight Flops loss
-    w_HW: float = 0.33                           # Weight HW loss
+    w_flops: float = 0.3                         # Weight Flops loss
+    w_HW: float = 0.3                            # Weight HW loss
+    omega: float = 0.3                           # Weight HW cost vs latency
     lacc: float = 0.10                           # Accuracy loss threshold (underfitting)
     flops_th: int = 150000000                    # Max number of FLOPS
     nparams_th: int = 2500000                    # Max number of PARAMS
@@ -77,6 +78,7 @@ def create_config_file(exp_dir: str | Path, overrides: Optional[Dict[str, Any]] 
         "verbose": schema.verbose,
         "w_flops": schema.w_flops,
         "w_HW": schema.w_HW,
+        "omega": schema.omega,
         "lacc": schema.lacc,
         "flops_th": schema.flops_th,
         "nparams_th": schema.nparams_th,
@@ -194,6 +196,7 @@ def _apply_defaults(d: Dict[str, Any]) -> Dict[str, Any]:
         "verbose": d.get("verbose", schema.verbose),
         "w_flops": d.get("w_flops", schema.w_flops),
         "w_HW": d.get("w_HW", schema.w_HW),
+        "omega": d.get("omega", schema.omega),
         "lacc": d.get("lacc", schema.lacc),
         "flops_th": d.get("flops_th", schema.flops_th),
         "nparams_th": d.get("nparams_th", schema.nparams_th),

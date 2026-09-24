@@ -226,7 +226,7 @@ class NeuralNetwork(BaseNeuralNetwork):
         if "hardware_module" in self.exp_cfg.mod_list:
             # Compute total latency cost
             from modules.loss.hardware_module import hardware_module
-            HW_module = hardware_module(weight_cost=0.7)
+            HW_module = hardware_module()
             HW_module.update_state(self.model)
             self.tot_latency_cost = HW_module.total_cost
 
@@ -294,7 +294,7 @@ class NeuralNetwork(BaseNeuralNetwork):
 
         # --- Callbacks ---
         es = EarlyStopping(monitor="val_accuracy", min_delta=0.005, patience=30, verbose=1,
-                            mode="maz", restore_best_weights=True)
+                            mode="max", restore_best_weights=True)
         # --- Compile ---
         self.model.model.compile(loss="categorical_crossentropy", optimizer=opt, metrics=["accuracy"])
         

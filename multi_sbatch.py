@@ -3,20 +3,21 @@ from itertools import product
 
 datasets_cifar = ['cifar10']
 optimizers = ['filtered', 'RS_ruled']
-seeds = [42, 7, 84] #123, 96, 
-weights = [0.5, 0.3]  # Example weights for flops and latency in the combined score
+seeds = [42, 7, 96] #123, 84, 
+weights = [0.3, 0.5, 0.7]  # Example weights for flops and latency in the combined score
 
 
 def generate_jobs():
     job_configs = []
 
     # CIFAR - flops
-    for w, optimizer, seed, dataset in product(weights, optimizers, seeds, datasets_cifar,):
+    for w, omega, optimizer, seed, dataset in product(weights, weights, optimizers, seeds, datasets_cifar,):
         job_configs.append({
             "data_name": dataset,
             "opt": optimizer,
             "seed": seed,
-            "weight": w
+            "weight": w, 
+            "omega": omega, 
         })
     return job_configs
 
@@ -28,7 +29,7 @@ def save_job_configs_to_file(job_configs, filename="params.txt"):
 
     with open(filename, "w") as f:
         for config in job_configs:
-            line = ",".join(str(config[k]) for k in ["data_name", "opt", "seed", "weight"])
+            line = ",".join(str(config[k]) for k in ["data_name", "opt", "seed", "weight", "omega"])
             f.write(line + ",hardware_module\n")
             
 # generate_params.py
