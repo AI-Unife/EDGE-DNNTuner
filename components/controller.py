@@ -106,7 +106,7 @@ class controller:
             max_latency = self.modules.get_module("hardware_module").max_latency
             max_cost = self.modules.get_module("hardware_module").max_cost
             weight_cost = self.modules.get_module("hardware_module").weight_cost
-            self.latency_th = round((max_cost * weight_cost) + (max_latency * (1-weight_cost)), 4)
+            self.latency_th = 1.0 # round((max_cost * weight_cost) + (max_latency * (1-weight_cost)), 4)
             self.weight_latency = self.exp_cfg.w_HW
             self.acc_w = 1-(self.weight_flops + self.weight_latency)  # Remaining weight for accuracy in the combined score
         # Optimization objective bookkeeping
