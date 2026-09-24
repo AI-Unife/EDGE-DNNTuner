@@ -39,7 +39,7 @@ class hardware_module(common_interface):
                       
         # init list of available configurations to an empty dict
         self.nvdla = {}
-        self.specs_dir = "/Users/alicebizzarri/Desktop/Work/AIDA4Edge/Symbolic_DNN-Tuner/nvdla/specs/"
+        self.specs_dir = Path(__file__).parent.parent.parent.joinpath('nvdla').joinpath('specs').as_posix() + "/"
         
         # iterate over each configuration
         for config in nvdla_list:
