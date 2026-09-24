@@ -16,22 +16,29 @@ For --parent-dir/--experiment targets, --hw-weight sets hardware_module's
 weight_cost used to (re)compute best_latency/best_hw_cost/best_hw_total_cost
 whenever missing -- including experiments whose mod_list never included
 hardware_module, so "what would the HW cost have been at weight W" can be
-answered for every experiment. Each (experiment, hw_weight) result is cached in
+answered for every experiment. Pass several values to test more than one weight
+at once (each experiment is then analyzed once per weight, and hw_weight_used
+tags every resulting row). Each (experiment, hw_weight) result is cached in
 <out-dir>/experiment_stats_cache.csv so re-running with the same weight never
 reloads a Keras model twice.
 
 Outputs (under --out-dir, default experiment_stats_out/):
-  stats_by_dataset_opt_module.csv   mean/std of accuracy, flops, latency, hw_cost,
-                                     hw_total_cost, and the timing_report.csv
+  stats_by_dataset_opt_module.csv   mean/std of accuracy, score, flops, latency,
+                                     hw_cost, hw_total_cost, and the timing_report.csv
                                      aggregates (total/search/symbolic/training
                                      time, plus one column per active module),
-                                     grouped by (dataset, opt, module) -- i.e.
-                                     across seed repeats of the same configuration.
-  scatter_accuracy_vs_hwcost.png    accuracy (y) vs HW total cost (x), colored by
-                                     module (no-module / flops-module / hw-module
-                                     / flops+hw-module), shaped by dataset, with
-                                     one extra larger black-edged marker per
-                                     (dataset, module) at the group's mean.
+                                     grouped by (dataset, opt, module, hw_weight_used)
+                                     when hw_weight_used is present -- i.e. across
+                                     seed repeats of the same configuration, broken
+                                     out per HW weight tested.
+  scatter_accuracy_vs_hwcost[_w<weight>].png   one per distinct hw_weight_used
+                                     value (suffix omitted when there's only one):
+                                     accuracy (y) vs HW total cost (x) at that
+                                     weight, colored by module (no-module /
+                                     flops-module / hw-module / flops+hw-module),
+                                     shaped by dataset, with one extra larger
+                                     black-edged marker per (dataset, module) at
+                                     the group's mean.
 
 --dataset/--opt/--seed/--module restrict which rows are used, in both outputs
 (default: everything found).
@@ -54,6 +61,7 @@ _CACHE_FILENAME = "experiment_stats_cache.csv"
 
 _METRICS = [
     ("best_accuracy", "accuracy"),
+    ("best_score", "score"),
     ("best_flops", "flops"),
     ("best_latency", "latency"),
     ("best_hw_cost", "hw_cost"),
@@ -214,7 +222,8 @@ def build_dataframe(args, out_dir: Path) -> pd.DataFrame:
     exp_dirs = discover_experiment_dirs(args.parent_dir, args.experiment)
     if exp_dirs:
         cache_path = out_dir / _CACHE_FILENAME
-        rows += collect_rows_from_experiments(exp_dirs, args.hw_weight, cache_path)
+        for w in args.hw_weight:
+            rows += collect_rows_from_experiments(exp_dirs, w, cache_path)
 
     if not rows:
         print("[ERROR] no data: pass --summary-csv and/or --parent-dir / --experiment", file=sys.stderr)
@@ -222,6 +231,7 @@ def build_dataframe(args, out_dir: Path) -> pd.DataFrame:
 
     df = pd.DataFrame(rows)
     df["module"] = df["mod_list"].apply(module_label) if "mod_list" in df.columns else "no-module"
+    df["dataset"] = df["dataset"].str.lower() if "dataset" in df.columns else "unknown"
     for col, _ in _METRICS:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
@@ -231,6 +241,8 @@ def build_dataframe(args, out_dir: Path) -> pd.DataFrame:
             df[col] = pd.to_numeric(df[col], errors="coerce")
     if "seed" in df.columns:
         df["seed"] = pd.to_numeric(df["seed"], errors="coerce")
+    if "hw_weight_used" in df.columns:
+        df["hw_weight_used"] = pd.to_numeric(df["hw_weight_used"], errors="coerce")
     return df
 
 
@@ -251,13 +263,17 @@ def apply_filters(df: pd.DataFrame, args) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def compute_stats(df: pd.DataFrame) -> pd.DataFrame:
-    """Mean/std of accuracy, flops, latency, hw_cost, hw_total_cost and the
+    """Mean/std of accuracy, score, flops, latency, hw_cost, hw_total_cost and the
     timing_report.csv aggregates (total/search/symbolic/training time, plus one
     column per active module) per (dataset, opt, module) -- i.e. across whatever
     repeats (seeds) fall in each group. hw_cost is the raw manufacturing-cost
     term; hw_total_cost is the latency-weighted total used for the scatter
-    plot's x-axis."""
+    plot's x-axis. Also grouped by hw_weight_used when present, so testing
+    several --hw-weight values breaks the stats out per weight instead of
+    averaging different weights together."""
     group_cols = ["dataset", "opt", "module"]
+    if "hw_weight_used" in df.columns and df["hw_weight_used"].notna().any():
+        group_cols = group_cols + ["hw_weight_used"]
     module_time_cols = [c for c in df.columns if c.startswith("mean_module_time_")]
     metrics = _METRICS + [(c, c[len("mean_"):]) for c in module_time_cols]
 
@@ -278,14 +294,36 @@ def compute_stats(df: pd.DataFrame) -> pd.DataFrame:
 # Scatter plot
 # ---------------------------------------------------------------------------
 
-def plot_scatter(df: pd.DataFrame, out_path: Path) -> None:
-    plot_df = df.dropna(subset=["best_hw_total_cost", "best_accuracy"])
-    if plot_df.empty:
+def plot_scatter(df: pd.DataFrame, out_dir: Path) -> None:
+    """One scatter plot per distinct hw_weight_used value found in df (rows with
+    no known weight, e.g. from a --summary-csv predating this column, form their
+    own "unknown weight" plot); the suffix is dropped when there's just one."""
+    base = df.dropna(subset=["best_hw_total_cost", "best_accuracy"])
+    if base.empty:
         print("[WARNING] no rows have both best_hw_total_cost and best_accuracy -- "
               "scatter plot skipped. Pass --hw-weight together with --parent-dir/--experiment "
               "to fill in missing HW cost for experiments that didn't use hardware_module.")
         return
 
+    if "hw_weight_used" in base.columns:
+        weights = sorted(base["hw_weight_used"].dropna().unique())
+        has_unknown = base["hw_weight_used"].isna().any()
+    else:
+        weights, has_unknown = [], True
+    weight_groups = [(w, base[base["hw_weight_used"] == w]) for w in weights]
+    if has_unknown:
+        unknown = base[base["hw_weight_used"].isna()] if "hw_weight_used" in base.columns else base
+        weight_groups.append((None, unknown))
+
+    single = len(weight_groups) == 1
+    for weight, plot_df in weight_groups:
+        if plot_df.empty:
+            continue
+        suffix = "" if single else ("_wunknown" if weight is None else f"_w{weight:g}")
+        _plot_scatter_one(plot_df, out_dir / f"scatter_accuracy_vs_hwcost{suffix}.png", weight)
+
+
+def _plot_scatter_one(plot_df: pd.DataFrame, out_path: Path, weight: Optional[float]) -> None:
     datasets = sorted(plot_df["dataset"].dropna().unique())
     markers = {ds: _DATASET_MARKERS[i % len(_DATASET_MARKERS)] for i, ds in enumerate(datasets)}
 
@@ -317,9 +355,10 @@ def plot_scatter(df: pd.DataFrame, out_path: Path) -> None:
     ax.legend(handles=dataset_handles + [mean_handle], title="dataset (shape)", loc="upper left",
               bbox_to_anchor=(1.02, 0.55), frameon=False)
 
+    weight_note = "unknown w_HW" if weight is None else f"w_HW={weight:g}"
     ax.set_xlabel("HW total cost")
     ax.set_ylabel("Accuracy (%)")
-    ax.set_title("Accuracy vs HW total cost")
+    ax.set_title(f"Accuracy vs HW total cost ({weight_note})")
     ax.grid(alpha=0.3)
     plt.tight_layout()
     plt.savefig(out_path, dpi=150, bbox_inches="tight")
@@ -340,10 +379,13 @@ def main():
                         "sit directly inside or are grouped under intermediate subfolders.")
     p.add_argument("--experiment", type=str, nargs="+", default=None,
                    help="Individual experiment dir(s) to analyze directly.")
-    p.add_argument("--hw-weight", type=float, default=0.3,
-                   help="hardware_module weight_cost used to (re)compute HW cost for --parent-dir/--experiment "
+    p.add_argument("--hw-weight", type=float, nargs="+", default=[0.3],
+                   help="hardware_module weight_cost(s) used to (re)compute HW cost for --parent-dir/--experiment "
                         "targets whenever it's missing -- including experiments that never used hardware_module. "
-                        "Default: 0.3. Cached per (experiment, hw_weight) in <out-dir>/experiment_stats_cache.csv.")
+                        "Pass several values to test more than one weight at once (each experiment is analyzed "
+                        "once per weight); results are tagged with hw_weight_used and broken out per weight in "
+                        "the stats table, with one scatter plot per weight. Default: 0.3. Cached per "
+                        "(experiment, hw_weight) in <out-dir>/experiment_stats_cache.csv.")
     p.add_argument("--dataset", type=str, nargs="+", default=None, help="Restrict to these dataset(s). Default: all.")
     p.add_argument("--opt", type=str, nargs="+", default=None, help="Restrict to these opt(s). Default: all.")
     p.add_argument("--seed", type=str, nargs="+", default=None, help="Restrict to these seed(s). Default: all.")
@@ -368,7 +410,8 @@ def main():
     print(f"\n[plan] {len(df)} experiment(s) after filtering -- "
           f"datasets={sorted(df['dataset'].dropna().unique())}, "
           f"opts={sorted(df['opt'].dropna().unique())}, "
-          f"modules={sorted(df['module'].dropna().unique())}")
+          f"modules={sorted(df['module'].dropna().unique())}, "
+          f"hw_weights={sorted(df['hw_weight_used'].dropna().unique()) if 'hw_weight_used' in df.columns else 'n/a'}")
 
     stats = compute_stats(df)
     stats_path = out_dir / "stats_by_dataset_opt_module.csv"
@@ -376,7 +419,7 @@ def main():
     print(f"\nStats saved: {stats_path}\n")
     print(stats.to_string(index=False))
 
-    plot_scatter(df, out_dir / "scatter_accuracy_vs_hwcost.png")
+    plot_scatter(df, out_dir)
 
 
 if __name__ == "__main__":

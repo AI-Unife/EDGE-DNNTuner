@@ -19,6 +19,7 @@ across seeds, plus an accuracy-vs-HW-cost scatter plot.
 """
 
 import os
+import re
 import sys
 import csv
 import json
@@ -445,6 +446,41 @@ class ResultsAnalyzer:
             if key.startswith("module_time_") and value not in (None, ""):
                 module_times[key[len("module_time_"):]] = self._safe_float(value)
         return module_times or None
+
+    def get_total_iterations(self) -> Optional[int]:
+        """Number of logged iterations (acc_report.txt lines) -- trained and
+        discarded alike. None if acc_report.txt is missing/empty. Same source
+        as get_discard_ratio()'s denominator, so the two stay consistent."""
+        accuracies = self._load_accuracies()
+        return len(accuracies) if accuracies else None
+
+    def get_discard_ratio(self) -> Optional[float]:
+        """Fraction of logged iterations whose acc_report.txt line was 'None' --
+        i.e. the sampled network violated a constraint and was discarded before
+        ever being trained (see controller.training()'s constraint checks).
+        None if acc_report.txt is missing/empty."""
+        accuracies = self._load_accuracies()
+        if not accuracies:
+            return None
+        return sum(1 for a in accuracies if a is None) / len(accuracies)
+
+    def get_total_wall_time(self) -> Optional[float]:
+        """Whole tuning run's wall-clock seconds, parsed from the .out file's
+        'TOTAL TIME --------> X seconds' line (printed by symbolic_tuner.py's
+        main() once the optimization loop finishes). None if the run hasn't
+        finished yet (line missing) or the .out file can't be found/read."""
+        try:
+            out_file = self._get_out_file()
+        except Exception as e:
+            print(f"  Error locating .out file for total wall time: {e}")
+            return None
+        try:
+            text = Path(out_file).read_text(errors="replace")
+        except Exception as e:
+            print(f"  Error reading {out_file}: {e}")
+            return None
+        m = re.search(r"TOTAL TIME\s*-+>\s*([\d.]+)\s*seconds", text)
+        return float(m.group(1)) if m else None
 
     def _load_config_yaml(self) -> None:
         """Load configuration from config.yaml file"""
