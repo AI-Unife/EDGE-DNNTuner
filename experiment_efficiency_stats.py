@@ -202,7 +202,10 @@ def compute_stats(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(records).sort_values(group_cols).reset_index(drop=True)
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
+    """Factory for this script's argparse.ArgumentParser, kept separate from main()
+    so tools (e.g. an interactive wizard) can introspect the available options
+    without parsing sys.argv or running the analysis."""
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--parent-dir", type=str, nargs="+", default=None,
                    help="Parent dir(s): every directory found anywhere underneath (at any depth) with an "
@@ -217,7 +220,11 @@ def main():
     p.add_argument("--opt", type=str, nargs="+", default=None, help="Restrict to these opt(s). Default: all.")
     p.add_argument("--seed", type=str, nargs="+", default=None, help="Restrict to these seed(s). Default: all.")
     p.add_argument("--out-dir", type=str, default="experiment_efficiency_out")
-    args = p.parse_args()
+    return p
+
+
+def main():
+    args = build_parser().parse_args()
 
     if not args.parent_dir and not args.experiment:
         p.error("give --parent-dir and/or --experiment")

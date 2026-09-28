@@ -369,7 +369,10 @@ def _plot_scatter_one(plot_df: pd.DataFrame, out_path: Path, weight: Optional[fl
 # Main
 # ---------------------------------------------------------------------------
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
+    """Factory for this script's argparse.ArgumentParser, kept separate from main()
+    so tools (e.g. an interactive wizard) can introspect the available options
+    without parsing sys.argv or running the analysis."""
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--summary-csv", type=str, nargs="+", default=None,
                    help="Already-computed summary CSV(s) from analyze_results.py (fast path, no recompute).")
@@ -393,7 +396,11 @@ def main():
                    choices=["no-module", "flops-module", "hw-module", "flops+hw-module"],
                    help="Restrict to these module configuration(s). Default: all.")
     p.add_argument("--out-dir", type=str, default="experiment_stats_out")
-    args = p.parse_args()
+    return p
+
+
+def main():
+    args = build_parser().parse_args()
 
     if not args.summary_csv and not args.parent_dir and not args.experiment:
         p.error("give --summary-csv and/or --parent-dir / --experiment")

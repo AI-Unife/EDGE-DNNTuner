@@ -1171,7 +1171,10 @@ def _roi_experiment_dirs(args):
     return out
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
+    """Factory for this script's argparse.ArgumentParser, kept separate from main()
+    so tools (e.g. an interactive wizard) can introspect the available options
+    without parsing sys.argv or running the analysis."""
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--plain-experiment", type=str, default=None,
                    help="Experiment dir of the single non-ROI (gesture) model.")
@@ -1236,7 +1239,11 @@ def main():
                         "leaves the other's existing output files untouched. Default: 'robustness' "
                         "alone, or both if --time-profile-dt-ms is given (back-compat).")
     p.add_argument("--out-dir", type=str, default="robustness_out")
-    args = p.parse_args()
+    return p
+
+
+def main():
+    args = build_parser().parse_args()
 
     roi_dirs = _roi_experiment_dirs(args)
     if not args.plain_experiment and not roi_dirs:
