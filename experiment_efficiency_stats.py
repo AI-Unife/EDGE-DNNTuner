@@ -26,11 +26,15 @@ Per experiment:
                          --timeout-hours (default 24h = 86400s) rather than
                          left blank.
   bandwidth_latency_38_4gbps_s / bandwidth_latency_25_6gbps_s
-                         size on disk of <experiment>/Model/best-model.keras (the
-                         single best model saved for that experiment) in KB,
-                         divided by a fixed memory bandwidth of 38.4 GB/s or
-                         25.6 GB/s respectively (1 GB/s = 1e6 KB/s). None if
-                         that file doesn't exist.
+                         size of the best model in KB, divided by a fixed memory
+                         bandwidth of 38.4 GB/s or 25.6 GB/s respectively (1 GB/s
+                         = 1e6 KB/s). The size is the on-disk size of
+                         <experiment>/Model/best-model.keras when that file was
+                         actually saved; otherwise it falls back to the KB TF's
+                         own model.summary() reported for the best iteration in
+                         the .out file ("Total params: N (X KB/MB)"). Which one
+                         was used is recorded per experiment in
+                         model_size_source ("file" / "tf_summary" / None).
   discard_ratio          Fraction of logged iterations whose acc_report.txt line
                          was "None" -- i.e. the sampled network violated a
                          constraint (see controller.training()) and was
@@ -55,7 +59,7 @@ import argparse
 import csv
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -74,13 +78,26 @@ _METRICS = [
 ]
 
 
-def best_model_size_kb(exp_dir: Path) -> Optional[float]:
-    """Size on disk of <exp_dir>/Model/best-model.keras -- the single best
-    model saved for this experiment -- in KB. None if the file doesn't exist."""
+def best_model_size_kb(exp_dir: Path, analyzer: ar.ResultsAnalyzer,
+                        best_iteration: Optional[int]) -> Tuple[Optional[float], Optional[str]]:
+    """(size_kb, source) for the best model of this experiment.
+
+    Prefers the size on disk of <exp_dir>/Model/best-model.keras. When that
+    file wasn't actually saved (e.g. the run never improved on its initial
+    score), falls back to the KB TF's own model.summary() reported for the
+    best iteration in the .out file ('Total params: N (X KB/MB)') -- source
+    is "file" or "tf_summary" respectively, or (None, None) if neither is
+    available."""
     model_path = exp_dir / "Model" / "best-model.keras"
-    if not model_path.exists():
-        return None
-    return model_path.stat().st_size / 1024.0
+    if model_path.exists():
+        return model_path.stat().st_size / 1024.0, "file"
+    if best_iteration is not None:
+        size_kb = analyzer.get_model_size_kb_from_summary(best_iteration)
+        if size_kb is not None:
+            print(f"  best-model.keras not saved -- using TF summary size for "
+                  f"iteration {best_iteration}: {size_kb:.2f} KB")
+            return size_kb, "tf_summary"
+    return None, None
 
 
 def bandwidth_latency_seconds(size_kb: Optional[float], bandwidth_gbps: float) -> Optional[float]:
@@ -100,7 +117,8 @@ def analyze_experiment_efficiency(exp_dir: Path, timeout_s: float) -> Optional[D
         return None
 
     best_result = analyzer.get_best_result()
-    size_kb = best_model_size_kb(exp_dir)
+    best_iteration = best_result.iteration if best_result else None
+    size_kb, size_source = best_model_size_kb(exp_dir, analyzer, best_iteration)
 
     total_time = analyzer.get_total_wall_time()
     if total_time is None:
@@ -112,6 +130,7 @@ def analyze_experiment_efficiency(exp_dir: Path, timeout_s: float) -> Optional[D
         "experiment": exp_dir.name,
         "best_nparams": best_result.nparams if best_result else None,
         "model_size_kb": size_kb,
+        "model_size_source": size_source,
         "total_iterations": analyzer.get_total_iterations(),
         "total_time_s": total_time,
         "discard_ratio": analyzer.get_discard_ratio(),
@@ -169,12 +188,30 @@ def build_dataframe(args) -> pd.DataFrame:
 
 
 def apply_filters(df: pd.DataFrame, args) -> pd.DataFrame:
-    if args.dataset:
-        df = df[df["dataset"].isin(args.dataset)]
+    # dataset/opt/seed come from config.yaml (see analyze_experiment_efficiency) --
+    # an experiment missing that file has none of them, so the column may not
+    # exist in df at all. Warn and skip rather than KeyError in that case.
     if args.opt:
-        df = df[df["opt"].isin(args.opt)]
+        if "opt" not in df.columns:
+            print("[WARNING] --opt given but no experiment has an 'opt' (config.yaml missing?) -- ignoring filter")
+        else:
+            print(f"[DEBUG] args.opt: {args.opt}")
+            opt = args.opt
+            df = df[df["opt"].isin(opt)]
+            print(f"[plan] {len(df)} experiment(s) after filtering by opt={opt}")
     if args.seed:
-        df = df[df["seed"].isin([float(s) for s in args.seed])]
+        if "seed" not in df.columns:
+            print("[WARNING] --seed given but no experiment has a 'seed' (config.yaml missing?) -- ignoring filter")
+        else:
+            seed = args.seed
+            df = df[df["seed"].isin([float(s) for s in seed])]
+            print(f"[plan] {len(df)} experiment(s) after filtering by seed={seed}")
+    if args.dataset:
+        if "dataset" not in df.columns:
+            print("[WARNING] --dataset given but no experiment has a 'dataset' (config.yaml missing?) -- ignoring filter")
+        else:
+            df = df[df["dataset"].str.lower().replace("-","").isin(args.dataset)]
+            print(f"[plan] {len(df)} experiment(s) after filtering by dataset={args.dataset}")
     return df
 
 
@@ -185,10 +222,11 @@ def compute_stats(df: pd.DataFrame) -> pd.DataFrame:
     flops+hw-module) is included because w_HW alone can't tell a no-module run
     apart from a flops-module one (both blank it, see build_dataframe) -- so in
     practice you get one group per no-module, per flops-module, and one per
-    distinct w_HW actually used by hardware_module (e.g. HW w=0.3 vs HW w=0.7)."""
-    group_cols = ["dataset", "opt", "module"]
-    if "w_HW" in df.columns:
-        group_cols = group_cols + ["w_HW"]
+    distinct w_HW actually used by hardware_module (e.g. HW w=0.3 vs HW w=0.7).
+    dataset/opt/w_HW come from config.yaml, so an experiment missing that file
+    (see analyze_experiment_efficiency) has none of them -- those columns are
+    only grouped on when at least one experiment actually has the value."""
+    group_cols = [c for c in ("dataset", "opt", "module", "w_HW") if c in df.columns]
     records = []
     for keys, g in df.groupby(group_cols, dropna=False):
         rec = dict(zip(group_cols, keys if isinstance(keys, tuple) else (keys,)))
@@ -223,11 +261,18 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _unique_or_na(df: pd.DataFrame, col: str):
+    """sorted(df[col].dropna().unique()), or 'n/a' if no experiment has that
+    column at all (e.g. dataset/opt/w_HW when config.yaml is missing)."""
+    return sorted(df[col].dropna().unique()) if col in df.columns else "n/a"
+
+
 def main():
-    args = build_parser().parse_args()
+    parser = build_parser()
+    args = parser.parse_args()
 
     if not args.parent_dir and not args.experiment:
-        p.error("give --parent-dir and/or --experiment")
+        parser.error("give --parent-dir and/or --experiment")
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -239,10 +284,10 @@ def main():
         sys.exit(1)
 
     print(f"\n[plan] {len(df)} experiment(s) after filtering -- "
-          f"datasets={sorted(df['dataset'].dropna().unique())}, "
-          f"opts={sorted(df['opt'].dropna().unique())}, "
-          f"modules={sorted(df['module'].dropna().unique())}, "
-          f"w_HW={sorted(df['w_HW'].dropna().unique()) if 'w_HW' in df.columns else 'n/a'}")
+          f"datasets={_unique_or_na(df, 'dataset')}, "
+          f"opts={_unique_or_na(df, 'opt')}, "
+          f"modules={_unique_or_na(df, 'module')}, "
+          f"w_HW={_unique_or_na(df, 'w_HW')}")
 
     per_exp_path = out_dir / "experiment_efficiency.csv"
     df.to_csv(per_exp_path, index=False)

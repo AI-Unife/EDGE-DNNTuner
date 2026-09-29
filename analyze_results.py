@@ -482,6 +482,50 @@ class ResultsAnalyzer:
         m = re.search(r"TOTAL TIME\s*-+>\s*([\d.]+)\s*seconds", text)
         return float(m.group(1)) if m else None
 
+    def _extract_total_params_kb_per_iteration(self, input_file) -> Dict[int, float]:
+        """{iteration: model size in KB}, from TF's model.summary() 'Total
+        params: N (X UNIT)' line (see tensorflow_implementation/neural_network.py's
+        build_network(), printed when verbose > 1), keyed by whichever
+        'ITERATION N' line precedes it in the .out file -- same iteration-
+        tracking approach as _extract_hyperparams_per_iteration. Keeps the
+        LAST match per iteration, in case summary() somehow printed more than
+        once for it."""
+        iteration_pattern = re.compile(r'ITERATION (\d+)')
+        params_pattern = re.compile(r'Total params:\s*[\d,]+\s*\(([\d.]+)\s*(KB|MB|GB|Bytes?)\)', re.IGNORECASE)
+        unit_to_kb = {"byte": 1 / 1024, "bytes": 1 / 1024, "kb": 1.0, "mb": 1024.0, "gb": 1024.0 ** 2}
+
+        results: Dict[int, float] = {}
+        current_iter = None
+        with open(input_file, 'r', encoding='utf-8', errors='replace') as f:
+            for line in f:
+                iter_match = iteration_pattern.search(line)
+                if iter_match:
+                    current_iter = int(iter_match.group(1))
+                    continue
+                if current_iter is None:
+                    continue
+                pm = params_pattern.search(line)
+                if pm:
+                    results[current_iter] = float(pm.group(1)) * unit_to_kb[pm.group(2).lower()]
+        return results
+
+    def get_model_size_kb_from_summary(self, iteration: int) -> Optional[float]:
+        """Model size in KB from TF's model.summary() 'Total params: N (X UNIT)'
+        line for a specific iteration in the .out file -- a fallback for when
+        Model/best-model.keras wasn't actually saved for that iteration (e.g.
+        the run never improved on its initial score). None if unavailable."""
+        try:
+            out_file = self._get_out_file()
+        except Exception as e:
+            print(f"  Error locating .out file for model size: {e}")
+            return None
+        try:
+            sizes = self._extract_total_params_kb_per_iteration(out_file)
+        except Exception as e:
+            print(f"  Error parsing model size from .out file: {e}")
+            return None
+        return sizes.get(iteration)
+
     def _load_config_yaml(self) -> None:
         """Load configuration from config.yaml file"""
         config_file = self.experiment_dir / "config.yaml"
