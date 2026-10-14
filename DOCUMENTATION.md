@@ -2,7 +2,7 @@
 
 > **Autori originali:** Michele Fraccaroli, Evelina Lamma, Fabrizio Riguzzi  
 > **Repository:** [micheleFraccaroli/Symbolic_DNN-Tuner](https://github.com/micheleFraccaroli/Symbolic_DNN-Tuner)  
-> **Branch attivo:** `main_gesture`
+> **Branch attivo:** `main`
 
 ---
 
@@ -22,7 +22,7 @@
    - 6.6 [Neural-Symbolic Bridge](#66-neural-symbolic-bridge)
    - 6.7 [Tuning Rules Symbolic](#67-tuning-rules-symbolic)
    - 6.8 [LFI Integration](#68-lfi-integration)
-   - 6.9 [Dataset e Gesture Dataset](#69-dataset-e-gesture-dataset)
+   - 6.9 [Dataset](#69-dataset)
    - 6.10 [Improvement Checker](#610-improvement-checker)
    - 6.11 [Integral](#611-integral)
    - 6.12 [Random Search](#612-random-search)
@@ -59,7 +59,7 @@
 - **Learning From Interpretations (LFI)** per l'adattamento probabilistico dei pesi delle regole simboliche sulla base dell'esperienza accumulata;
 - **Funzioni di loss modulari** per l'ottimizzazione multi-obiettivo (accuracy, FLOPs, latenza hardware).
 
-Il sistema supporta due backend deep learning (TensorFlow e PyTorch), gestisce dataset standard (CIFAR-10/100, MNIST, TinyImageNet) e dataset event-based per gesti (DVSGesture), e include profilazione hardware su NVDLA e quantizzazione opzionale.
+Il sistema supporta due backend deep learning (TensorFlow e PyTorch), gestisce dataset standard (CIFAR-10/100, MNIST, TinyImageNet) e include profilazione hardware su NVDLA e quantizzazione opzionale.
 
 ---
 
@@ -129,8 +129,6 @@ Symbolic_DNN-Tuner/
 ├── analyze_results.py         # Analisi post-esperimento dei risultati
 ├── download_hf_dataset.py     # Download dataset da HuggingFace
 ├── test_quantizer.py          # Test del quantizzatore
-├── test_roigesture_3d.py      # Test dataset ROI gesture 3D
-├── roi_map_viewer.py          # Visualizzatore mappe ROI
 ├── requirements.txt           # Dipendenze Python
 │
 ├── components/                # Logica core del sistema
@@ -143,7 +141,6 @@ Symbolic_DNN-Tuner/
 │   ├── objFunction.py         # Wrapper funzione obiettivo
 │   ├── constraints.py         # Vincoli sullo spazio campionato
 │   ├── dataset.py             # Caricamento dataset
-│   ├── gesture_dataset.py     # Dataset event-camera (DVSGesture)
 │   ├── improvement_checker.py # Tracciamento miglioramenti
 │   ├── integral.py            # Calcolo features integrali delle curve di loss
 │   ├── lfi_integration.py     # Interfaccia ProbLog LFI
@@ -173,8 +170,7 @@ Symbolic_DNN-Tuner/
 ├── tensorflow_implementation/ # Implementazione TensorFlow
 │   ├── model.py               # Builder modello Keras
 │   ├── module_backend.py      # Backend FLOPs/params per TensorFlow
-│   ├── neural_network.py      # Training loop TensorFlow
-│   └── custom_train.py        # Training personalizzato per gesture/event
+│   └── neural_network.py      # Training loop TensorFlow
 │
 ├── symbolic_base/             # File base di ragionamento simbolico
 │   ├── symbolic_analysis.pl   # Regole Prolog per diagnosi problemi
@@ -213,7 +209,7 @@ Il sistema di configurazione utilizza un `dataclass` (`ConfigSchema`) con valori
 | `early_stop`    | `int`     | `30`                | Patience per early stopping                                   |
 | `epochs`        | `int`     | `2`                 | Epoche di training per valutazione                            |
 | `mod_list`      | `list`    | `[]`                | Moduli attivi (es. `["flops_module", "hardware_module"]`)     |
-| `dataset`       | `str`     | `"light"`           | Dataset: `cifar10`, `cifar100`, `mnist`, `tinyimagenet`, `gesture`, ecc. |
+| `dataset`       | `str`     | `"light"`           | Dataset: `cifar10`, `cifar100`, `mnist`, `tinyimagenet`, ecc. |
 | `name`          | `str`     | `"experiment"`      | Nome esperimento (determina la directory di output)           |
 | `seed`          | `int`     | `42`                | Seed per riproducibilità                                      |
 | `quantization`  | `bool`    | `False`             | Abilitare la quantizzazione post-training                     |
@@ -224,10 +220,6 @@ Il sistema di configurazione utilizza un `dataclass` (`ConfigSchema`) con valori
 | `lacc`          | `float`   | `0.10`              | Soglia per underfitting: se `1 - acc > lacc`                  |
 | `flops_th`      | `int`     | `150_000_000`       | Soglia massima FLOPs                                          |
 | `nparams_th`    | `int`     | `2_500_000`         | Soglia massima parametri                                      |
-| `frames`        | `int`     | `16`                | Numero di frame per dataset gesture                           |
-| `mode`          | `str`     | `"fwdPass"`         | Modalità esperimento: `fwdPass`, `depth`, `hybrid`            |
-| `channels`      | `int`     | `2`                 | Canali per dataset event-based                                |
-| `polarity`      | `str`     | `"both"`            | Polarità per dataset event-based                              |
 | `hf_cache`      | `str`     | `None`              | Directory cache HuggingFace                                   |
 
 ### Strategie di Ottimizzazione (`opt`)
@@ -428,9 +420,9 @@ Wrapper per il **Learning From Interpretations** di ProbLog. Impara i pesi delle
 2. **`learning()`**: Carica il programma LFI da `lfi.pl`, esegue `run_lfi()` con l'esperienza accumulata, ed estrae i pesi aggiornati.
 3. I pesi appresi vengono passati al `NeuralSymbolicBridge` per aggiornare le probabilità delle regole.
 
-### 6.9 Dataset e Gesture Dataset
+### 6.9 Dataset
 
-**File:** `components/dataset.py` e `components/gesture_dataset.py`
+**File:** `components/dataset.py`
 
 - **`TunerDataset`**: Caricatore unificato per i dataset standard. Ogni metodo `load_*()` restituisce `(x_train, y_train, x_val, y_val, x_test, y_test)` e i metadati (`num_classes`, `input_shape`).
 
@@ -441,14 +433,6 @@ Wrapper per il **Learning From Interpretations** di ProbLog. Impara i pesi delle
 | MNIST           | `load_mnist()`         | (28, 28, 1)        |
 | TinyImageNet    | `load_tiny_imagenet()`  | (64, 64, 3)        |
 | Light (subset)  | `load_light_cifar()`   | (32, 32, 3)        |
-| DVSGesture      | `load_gesture()`       | (T, H, W, C)       |
-| ROI Gesture     | `load_roi_gesture()`   | variabile           |
-
-- **`gesture_dataset.py`**: Gestisce i dataset da event-camera (DVSGesture) con supporto per:
-  - ROI (Region of Interest) con mappe posizionali
-  - Codifica temporale one-hot (`ToOneHotTimeCoding`)
-  - Trasformazioni ROI (`ROIMapTransform`)
-  - Modalità: `fwdPass` (frame-by-frame), `depth` (profondità temporale), `hybrid`
 
 ### 6.10 Improvement Checker
 
@@ -565,10 +549,9 @@ Modulo per la profilazione della latenza su acceleratore NVDLA:
 
 | File                | Descrizione                                                            |
 |---------------------|------------------------------------------------------------------------|
-| `model.py`          | Definisce `TFModel` basato su Keras Sequential/Functional API. Supporta connessioni residuali e input duali per dataset ROI. |
+| `model.py`          | Definisce `TFModel` basato su Keras Sequential/Functional API. Supporta connessioni residuali. |
 | `module_backend.py` | Implementa `BackendInterface` per TensorFlow, delegando al `flops_calculator`.  |
-| `neural_network.py` | Implementa il ciclo di training Keras. Per dataset gesture, delega a `custom_train.py`. |
-| `custom_train.py`   | Loop di training personalizzato per dataset temporali: forward pass frame-by-frame con majority voting per l'evaluazione. Supporta le modalità `fwdPass`, `depth` e `hybrid`. |
+| `neural_network.py` | Implementa il ciclo di training Keras. |
 
 ---
 
@@ -651,11 +634,9 @@ Sistema opzionale di quantizzazione post-training, attivabile con `--quantizatio
 | Script                   | Descrizione                                                                  |
 |--------------------------|------------------------------------------------------------------------------|
 | `analyze_results.py`    | Analizza i log degli esperimenti completati. Crea CSV per esperimento e un CSV riassuntivo con il miglior risultato per ciascuno. Legge da `algorithm_logs/`, `config.yaml`, e i log dei moduli. |
-| `multi_sbatch.py`       | Genera file `params.txt` con tutte le combinazioni di parametri per i job array SLURM. Supporta configurazioni per CIFAR e gesture. |
-| `download_hf_dataset.py` | Scarica dataset da HuggingFace (es. TinyImageNet, DVSGesture) nella cache locale. |
-| `roi_map_viewer.py`     | Visualizza le mappe ROI per dataset gesture/event-based.                     |
+| `multi_sbatch.py`       | Genera file `params.txt` con tutte le combinazioni di parametri per i job array SLURM. Supporta configurazioni per CIFAR e TinyImageNet. |
+| `download_hf_dataset.py` | Scarica dataset da HuggingFace (es. TinyImageNet) nella cache locale. |
 | `test_quantizer.py`     | Script di test per il modulo di quantizzazione.                              |
-| `test_roigesture_3d.py` | Script di test per il dataset ROI gesture 3D.                                |
 
 ---
 
@@ -687,21 +668,6 @@ python symbolic_tuner.py \
   --name "results_FLOPS/${NAME_EXP}" \
   --dataset "$DATA" --opt "$OPT" --seed "$SEED" \
   --eval 1000 --epochs 100 --mod_list flops_module
-```
-
-### Job Array — Dataset Gesture (`jonarray_gesture.slurm`)
-
-Esegue combinazioni di modalità × frame × canali da `params_gesture.txt`:
-
-```bash
-#SBATCH --array=0-16%4
-# Parametri: DATA,MODE,FRAMES,CHANNELS,PARAMS,MODULE
-
-python symbolic_tuner.py \
-  --name "results_gesture_new/${NAME_EXP}" \
-  --dataset "$DATA" --mode "$MODE" \
-  --frames "$FRAMES" --channels "$CHANNELS" \
-  --opt filtered --seed 42 --eval 1000 --epochs 100
 ```
 
 ### Esempio di Utilizzo Locale
@@ -902,9 +868,9 @@ La directory **`algorithm_logs/`** contiene un insieme completo di file che regi
 La struttura tipica di una directory di risultati è la seguente:
 
 ```
-results_gesture/
-├── gesture/
-│   └── 26_03_20_15_75562_gesture_hybrid_64_8_BASELINE/  # Identificativo esperimento
+results/
+├── cifar10/
+│   └── 26_03_20_15_75562_cifar10_filtered_42/  # Identificativo esperimento
 │       ├── algorithm_logs/  # Directory principale dei log
 │       │   ├── hyper-neural.txt          # 28 iperparametri (una riga per iterazione)
 │       │   ├── acc_report.txt            # 28 accuratezze (0.485 → 0.934)
@@ -1049,7 +1015,6 @@ tensorflow==2.15          # Backend TF (opzionale se si usa PyTorch)
 scikit-optimize>=0.10.2   # Bayesian Optimization
 matplotlib>=3.9.0         # Plotting
 pytest>=8.3.4             # Testing
-tonic>=1.5.0              # Dataset event-camera (DVSGesture)
 problog>=2.2.6            # Ragionamento simbolico probabilistico
 tqdm==4.67.1              # Barre di progresso
 PyYAML==6.0.3             # Configurazione
