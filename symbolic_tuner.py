@@ -237,14 +237,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--polarity", type=str, default="both",
                         choices=["both", "sum", "sub", "drop"],
                         help="Polarity for event-based datasets")
-    parser.add_argument("--delta_t", type=int, default=200000,
-                        help="fwdPass: microseconds per frame when a split is framed by fixed time window")
-    parser.add_argument("--train_framing", type=str, default="frames",
-                        choices=["frames", "delta_t"],
-                        help="fwdPass TRAIN split: 'frames' (fixed --frames) or 'delta_t' (fixed --delta_t window)")
-    parser.add_argument("--test_framing", type=str, default="delta_t",
-                        choices=["frames", "delta_t"],
-                        help="fwdPass TEST split: 'delta_t' (fixed --delta_t window, per-recording majority vote) or 'frames' (fixed --frames)")
 
 
     args = parser.parse_args()

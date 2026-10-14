@@ -43,22 +43,20 @@ def generate_params_file(output_path: str = "params.txt"):
     starting from 'gesture'. Ignores prefixes and IDs.
     """
     datasets = ["roigesture_matrix", "roigesture_coords", "gesture"] # "roigesture_matrix", "roigesture_coords", 
-    # params_th = [1000000, 10000000000]  # 1M and 100G params, for example
-    
+    params_th = [1000000, 10000000000]  # 1M and 100G params, for example
+    seeds = [42, 7, 96]  # Example seeds
 
     # configuration definitions
     configs = [
         # ("depth",   [(4, 4), (8, 8), (16, 16), (32, 32), (64, 64)]),
-        ("fwdPass", [(4, 2), (8, 2), (16, 2), (32, 2), (64, 2)]),
-        ("hybrid",  [(16, 4), (16, 8), (32, 4), (32, 8), (64, 4), (64, 8), (64, 16)]),
+        ("fwdPass", [10000, 100000, 200000]), 
+        #("hybrid",  [(16, 4), (16, 8), (32, 4), (32, 8), (64, 4), (64, 8), (64, 16)]),
     ]
 
     lines = []
-    for dataset in datasets:
-        # for param in params_th:
-        for mode, params_list in configs:
+    for dataset, (mode, params_list), seed in product(datasets, configs, seeds):
             for p in params_list:
-                line = f"{dataset},{mode},{p[0]},{p[1]}"
+                line = f"{dataset},{mode},{p},{seed}"
                 lines.append(line)
 
     # write the file
@@ -67,8 +65,8 @@ def generate_params_file(output_path: str = "params.txt"):
 
 def main():
     job_configs = generate_jobs()
-    save_job_configs_to_file(job_configs, "params.txt")
-    # generate_params_file()
+    # save_job_configs_to_file(job_configs, "params.txt")
+    generate_params_file()
 
 if __name__ == "__main__":
     main()

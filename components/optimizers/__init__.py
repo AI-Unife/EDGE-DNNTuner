@@ -10,7 +10,7 @@ from components.optimizers.bo import custom_bo, skopt_bo
 from components.optimizers.random_search import random_search
 
 STRATEGIES = {
-    "standard": OptStrategy(custom_bo,     space_update="static",  use_filter=False),
+    "standard": OptStrategy(skopt_bo,     space_update="static",  use_filter=False),
     "filtered": OptStrategy(custom_bo,     space_update="expand",  use_filter=True),
     "basic":    OptStrategy(skopt_bo,      space_update="replace", use_filter=False),
     "RS":       OptStrategy(random_search, space_update="static",  use_filter=False),
