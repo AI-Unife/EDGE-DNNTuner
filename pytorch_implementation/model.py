@@ -94,8 +94,7 @@ class TorchModel(nn.Module, TunerModel):
     # Reverse mapping from PyTorch modules back to custom layer types
     to_type_map = {v: k for k, v in from_type_map.items()}
 
-    def __init__(self, input_shape, params, n_classes, layer_x_block=2, batch=True,
-                 is_roi=False, pos_input_shape=None):
+    def __init__(self, input_shape, params, n_classes, layer_x_block=2, batch=True):
         """
         Initialize the model with the given configuration.
         
@@ -105,9 +104,6 @@ class TorchModel(nn.Module, TunerModel):
             n_classes:       Number of output classes.
             layer_x_block:   Convolutions per block (min 2 to match TF behaviour).
             batch:           Enable BatchNorm (True only for tiny-imagenet / cim).
-            is_roi:          Whether the dataset provides a position map input.
-            pos_input_shape: Shape of the position map (e.g. (4, 16, 16)); ignored
-                             when is_roi=False.
         """
         super(TorchModel, self).__init__()
         
@@ -117,8 +113,6 @@ class TorchModel(nn.Module, TunerModel):
         self.activation = self._get_activation(params['activation'])
         self.batch = batch
         self.layer_x_block = layer_x_block
-        self.is_roi = is_roi
-        self.pos_input_shape = pos_input_shape
         
             # Parameter parsing
         self.use_residual = params.get('skip_connection', False)
@@ -189,17 +183,8 @@ class TorchModel(nn.Module, TunerModel):
                 out_feat = F.adaptive_avg_pool2d(out_feat, (1, 1))
             self.flat_dim = out_feat.view(1, -1).size(1)
 
-        # For ROI datasets, flatten and concatenate the position map exactly as TF:
-        #   Flatten(features) + Flatten(pos_map) -> Concatenate -> Dense
-        if self.is_roi and pos_input_shape is not None:
-            self.pos_flat_dim = 1
-            for d in pos_input_shape:
-                self.pos_flat_dim *= d
-        else:
-            self.pos_flat_dim = 0
-
         self.classifier = nn.Sequential()
-        current_dim = self.flat_dim + self.pos_flat_dim
+        current_dim = self.flat_dim
         
         # Static FC layers — fc_1, fc_2, … (same as TF's first fc loop)
         # These are fixed layers added by the controller (not dynamic new_fc_*).
@@ -339,10 +324,6 @@ class TorchModel(nn.Module, TunerModel):
             if self.batch:
                 x = F.adaptive_avg_pool2d(x, (1, 1))
             x = torch.flatten(x, 1)
-            # For ROI models, concatenate a zero pos tensor to match classifier input size
-            if self.is_roi and self.pos_input_shape is not None:
-                dummy_pos = torch.zeros(1, self.pos_flat_dim)
-                x = torch.cat([x, dummy_pos], dim=1)
             
             for name, module in self.classifier.named_children():
                 x = module(x)
@@ -364,16 +345,12 @@ class TorchModel(nn.Module, TunerModel):
             self.train()
 
 
-    def forward(self, x, pos=None):
+    def forward(self, x):
         x = self.features(x)
         if self.batch:
             # Global Average Pooling: (N, C, H, W) -> (N, C, 1, 1)
             x = F.adaptive_avg_pool2d(x, (1, 1))
         x = torch.flatten(x, 1)                     # (N, flat_dim)
-        if self.is_roi and pos is not None:
-            # Replicate TF: Flatten(pos_map) then Concatenate with image features
-            pos_flat = pos.view(pos.shape[0], -1)    # (N, pos_flat_dim)
-            x = torch.cat([x, pos_flat], dim=1)      # (N, flat_dim + pos_flat_dim)
         x = self.classifier(x)
         return x
     
@@ -401,16 +378,10 @@ class TorchModel(nn.Module, TunerModel):
                 if module.__class__ in self.to_type_map:
                     hooks.append(module.register_forward_hook(make_hook(name)))
 
-        # For ROI models the forward pass requires a pos tensor; provide a zero
-        # dummy so the classifier's Linear layer receives the correct input size.
-        dummy_pos = None
-        if self.is_roi and self.pos_input_shape is not None:
-            dummy_pos = torch.zeros([1, *self.pos_input_shape])
-
         # Perform forward pass to trigger hooks
         self.layers = {}
         with torch.no_grad():
-            self(dummy_input, dummy_pos)
+            self(dummy_input)
 
         # Clean up hooks
         for hook in hooks:

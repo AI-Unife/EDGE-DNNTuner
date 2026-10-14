@@ -22,11 +22,9 @@ from pytorch_implementation.model import TorchModel
 
 
 class TorchTunerDataset(Dataset):
-    def __init__(self, images: torch.Tensor, labels: torch.Tensor,
-                 pos: torch.Tensor = None, transform=None):
+    def __init__(self, images: torch.Tensor, labels: torch.Tensor, transform=None):
         self.images = images
         self.labels = labels
-        self.pos = pos          # None for non-ROI datasets
         self.transform = transform
 
     def __len__(self):
@@ -36,8 +34,6 @@ class TorchTunerDataset(Dataset):
         image = self.images[index]
         if self.transform:
             image = self.transform(image)
-        if self.pos is not None:
-            return image, self.labels[index], self.pos[index]
         return image, self.labels[index]
     
 
@@ -61,7 +57,6 @@ class NeuralNetwork(BaseNeuralNetwork):
         # Y_train may be:
         #   [N]          integer labels  (standard datasets)
         #   [N, C]       one-hot         (TF-converted datasets)
-        #   [N, T, C]    temporal one-hot (gesture ToOneHotTimeCoding)
         # PyTorch CrossEntropyLoss always needs 1-D integer class indices [N].
         self.train_labels = torch.from_numpy(
             self._extract_int_labels(self.dataset.Y_train)
@@ -69,21 +64,6 @@ class NeuralNetwork(BaseNeuralNetwork):
         self.test_labels = torch.from_numpy(
             self._extract_int_labels(self.dataset.Y_test)
         ).long()
-
-        # Convert position maps to tensors for ROI datasets.
-        # pos arrays have shape (N, T, H, W, C) or (N, C, H, W) depending on mode;
-        # keep the original numpy layout and convert to float32 tensor without
-        # reordering axes — the model flattens them entirely.
-        if self.is_roi and hasattr(self.dataset, 'pos_train') and self.dataset.pos_train is not None:
-            self.train_pos = torch.from_numpy(
-                self.dataset.pos_train.astype('float32')
-            )
-            self.test_pos = torch.from_numpy(
-                self.dataset.pos_test.astype('float32')
-            )
-        else:
-            self.train_pos = None
-            self.test_pos = None
 
         self.activation_map = {
             "relu": nn.ReLU,
@@ -110,15 +90,11 @@ class NeuralNetwork(BaseNeuralNetwork):
         Handles:
           y.ndim == 1  → already integer [N], return as-is
           y.ndim == 2  → one-hot [N, C], take argmax over last axis
-          y.ndim == 3  → temporal one-hot [N, T, C] (ToOneHotTimeCoding),
-                         all frames carry the same label so take frame 0
         """
         if y.ndim == 1:
             return y.astype(np.int64)
         elif y.ndim == 2:
             return np.argmax(y, axis=-1).astype(np.int64)
-        elif y.ndim == 3:
-            return np.argmax(y[:, 0, :], axis=-1).astype(np.int64)
         else:
             raise ValueError(f"Unsupported label shape: {y.shape}")
 
@@ -131,70 +107,19 @@ class NeuralNetwork(BaseNeuralNetwork):
         if t.ndim == 4:
             # (N, H, W, C) → (N, C, H, W)
             return t.permute(0, 3, 1, 2).contiguous().float()
-        elif t.ndim == 5:
-            # Temporal gesture: (N, T, H, W, C) → (N, T, C, H, W)
-            return t.permute(0, 1, 4, 2, 3).contiguous().float()
         else:
             return t.contiguous().float()
     
-    def _model_forward(self, inputs: torch.Tensor, pos: torch.Tensor = None) -> torch.Tensor:
-        """
-        Run a forward pass through the model, handling both standard 4D input
-        (N, C, H, W) and temporal 5D input (N, T, C, H, W).
-
-        For temporal data each frame is processed independently; the per-frame
-        logits are averaged across the time dimension before returning, so the
-        output is always (N, n_classes) regardless of the number of frames.
-
-        pos is the flattened position map (N, *pos_shape) for ROI datasets;
-        it is forwarded to TorchModel.forward which concatenates it to features.
-        """
-        if inputs.ndim == 5:
-            N, T, C, H, W = inputs.shape
-            # Flatten the time dimension into the batch dimension
-            flat = inputs.view(N * T, C, H, W)
-            # Expand pos along the time axis so each frame gets its own pos slice
-            pos_flat = None
-            if pos is not None:
-                # pos shape: (N, T, ...) or (N, ...) — expand to (N*T, ...)
-                if pos.ndim >= 2 and pos.shape[1] == T:
-                    pos_flat = pos.view(N * T, *pos.shape[2:])
-                else:
-                    pos_flat = pos.unsqueeze(1).expand(N, T, *pos.shape[1:]).reshape(N * T, *pos.shape[1:])
-            out_flat = self.model(flat, pos_flat)    # (N*T, n_classes)
-            return out_flat.view(N, T, -1).mean(dim=1)
-        return self.model(inputs, pos)
-
     def build_network(self, params, layer_x_block=2):
         """
         Build the PyTorch model according to the given hyperparameters.
         """
-        if self.dataset.X_train.ndim == 5:
-            # Temporal dataset: (N, T, H, W, C) — the model operates on single
-            # frames, so derive the per-frame shape (H, W, C) from axis 2 onward.
-            frame_shape = self.dataset.X_train.shape[2:]  # (H, W, C)
-            self.input_shape = (frame_shape[2], frame_shape[0], frame_shape[1])  # (C, H, W)
-        else:
-            input_shape = self.dataset.X_train.shape[1:]  # (H, W, C)
-            self.input_shape = (input_shape[2], input_shape[0], input_shape[1])  # (C, H, W)
+        input_shape = self.dataset.X_train.shape[1:]  # (H, W, C)
+        self.input_shape = (input_shape[2], input_shape[0], input_shape[1])  # (C, H, W)
 
         # Match TF logic: BatchNorm in conv blocks only for tiny-imagenet and cim datasets
         dataset_name = self.exp_cfg.dataset.lower()
         use_bn = "tiny" in dataset_name or "cim" in dataset_name
-
-        # Derive pos_input_shape from the dataset for ROI models.
-        # Must match TF's logic: for temporal data (5D images) TF uses shape[2:]
-        # to get the per-frame pos shape; for single-frame data (4D) it uses shape[1:].
-        pos_input_shape = None
-        if self.is_roi and self.train_pos is not None:
-            if self.train_images.ndim == 5:
-                # Temporal dataset: train_images (N, T, C, H, W), train_pos (N, T, ...)
-                # → per-frame pos shape = shape[2:]  (drop batch and time dims)
-                pos_input_shape = tuple(self.train_pos.shape[2:])
-            else:
-                # Single-frame dataset: train_images (N, C, H, W), train_pos (N, ...)
-                # → pos shape = shape[1:]  (drop batch dim only)
-                pos_input_shape = tuple(self.train_pos.shape[1:])
 
         self.model = TorchModel(
             params=params,
@@ -202,8 +127,6 @@ class NeuralNetwork(BaseNeuralNetwork):
             n_classes=self.dataset.n_classes,
             layer_x_block=layer_x_block,
             batch=use_bn,
-            is_roi=self.is_roi,
-            pos_input_shape=pos_input_shape,
         ).to(self.device)
 
         print("Model Summary:")
@@ -316,17 +239,13 @@ class NeuralNetwork(BaseNeuralNetwork):
         else:
             transform = None
 
-        # Pass pos tensors to the dataset when ROI is active so the loader
-        # returns (inputs, labels, pos) triplets instead of (inputs, labels) pairs.
         train_dataset = TorchTunerDataset(
-            self.train_images, self.train_labels,
-            pos=self.train_pos, transform=transform
+            self.train_images, self.train_labels, transform=transform
         )
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0)
 
         test_dataset = TorchTunerDataset(
-            self.test_images, self.test_labels,
-            pos=self.test_pos, transform=None
+            self.test_images, self.test_labels, transform=None
         )
         test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
 
@@ -360,19 +279,10 @@ class NeuralNetwork(BaseNeuralNetwork):
             else:
                 self.model.train()
                 running_loss, correct = 0.0, 0
-                for batch in train_loader:
-                    # Unpack: (inputs, labels) for standard datasets,
-                    #         (inputs, labels, pos) for ROI datasets
-                    if len(batch) == 3:
-                        inputs, labels, pos = batch
-                        pos = pos.to(self.device)
-                    else:
-                        inputs, labels = batch
-                        pos = None
+                for inputs, labels in train_loader:
                     inputs, labels = inputs.to(self.device), labels.to(self.device)
                     optimizer.zero_grad()
-                    # _model_forward handles 4D/5D inputs and optional pos map
-                    outputs = self._model_forward(inputs, pos)
+                    outputs = self.model(inputs)
                     loss = self.criterion(outputs, labels)
                     # Regularization
                     if self.rgl:
@@ -440,16 +350,9 @@ class NeuralNetwork(BaseNeuralNetwork):
         self.model.eval()
         val_loss, val_correct = 0.0, 0
         with torch.no_grad():
-            for batch in test_loader:
-                if len(batch) == 3:
-                    inputs, labels, pos = batch
-                    pos = pos.to(self.device)
-                else:
-                    inputs, labels = batch
-                    pos = None
+            for inputs, labels in test_loader:
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
-                # _model_forward handles 4D/5D inputs and optional pos map
-                outputs = self._model_forward(inputs, pos)
+                outputs = self.model(inputs)
                 loss = self.criterion(outputs, labels)
                 val_loss += loss.item()
                 val_correct += (outputs.argmax(1) == labels).sum().item()
