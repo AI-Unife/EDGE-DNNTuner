@@ -150,12 +150,7 @@ class quantizer_module(quantizer_interface):
         if self.quantized_model is None:
             raise ValueError("Quantized model is not available. Please run quantize_function first.")
                 
-        ### ADD this part to manage gesture dataset evaluation
-        if (self.cfg.mode in ("fwdPass", "hybrid")) and "gesture" in self.cfg.dataset:
-            from components.custom_train import eval_model
-            self.score = eval_model(self.quantized_model, x_test, y_test)
-        else:
-            self.score = self.quantized_model.evaluate(x_test, y_test, verbose=2)
+        self.score = self.quantized_model.evaluate(x_test, y_test, verbose=2)
         return self.score
 
     def save_quantized_model(self, path="quantized_model_potq.keras"):
