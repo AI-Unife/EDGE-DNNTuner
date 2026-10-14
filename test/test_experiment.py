@@ -46,8 +46,8 @@ interactively if not passed on the command line). The TARGET activation
                             Model/best-model.keras on the TEST SET ONLY (no
                             retraining). For gesture / roigesture_* the test
                             split is framed per --test-framing / config's
-                            test_framing (default: delta_t, variable #frames +
-                            majority vote; or frames, dense, config's frames).
+                            test_framing (default: delta_t, first 1.5 s at fixed
+                            delta_t; or frames, config's frames).
                             best-model.keras is evaluated as-is; pass
                             --force-winner-activation to patch it to the winner
                             when they differ. Optional: --delta-t <us>,
@@ -879,7 +879,7 @@ def run_single_experiment(experiment: Path, args, mode: str, activation: str) ->
         cfg = reload_cfg()
 
     def _framing_desc(framing: str) -> str:
-        return "fixed Δt (variable #frames)" if framing == "delta_t" else f"fixed {cfg.frames} frames"
+        return "fixed Δt, first 1.5 s" if framing == "delta_t" else f"fixed {cfg.frames} frames"
 
     print(f"\n{'='*60}")
     print(f"Experiment       : {experiment}")
@@ -1123,8 +1123,8 @@ def main():
             "fwdPass gesture/roigesture retrain only: how to frame the TRAINING "
             "split. 'frames' (default) = fixed number of frames (config's "
             "'frames'), i.e. a variable inter-frame time across recordings. "
-            "'delta_t' = fixed time window (config's delta_t), i.e. a variable "
-            "number of frames per recording. Independent of --test-framing. "
+            "'delta_t' = fixed time window (config's delta_t) over the first "
+            "1.5 s of each recording. Independent of --test-framing. "
             "If omitted, uses train_framing from config.yaml (default 'frames')."
         ),
     )
@@ -1134,10 +1134,10 @@ def main():
             "fwdPass gesture/roigesture: how to frame the TEST split, for both "
             "evaluation-only modes (force_activation_infer, auto_activation_infer) "
             "and the test-set evaluation done after any retrain. 'delta_t' "
-            "(default) = fixed time window (config's delta_t), variable number of "
-            "frames per recording, per-recording majority-vote accuracy. 'frames' "
-            "= fixed number of frames (config's 'frames'), dense, matching the old "
-            "pre-delta_t evaluation. Independent of --train-framing. If omitted, "
+            "(default) = fixed time window (config's delta_t) over the first 1.5 s "
+            "of each recording. 'frames' = fixed number of frames (config's "
+            "'frames'), matching the old pre-delta_t evaluation. Independent of "
+            "--train-framing. If omitted, "
             "uses test_framing from config.yaml (default 'delta_t')."
         ),
     )

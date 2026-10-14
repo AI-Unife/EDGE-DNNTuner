@@ -287,8 +287,8 @@ class TunerDataset:
     def load_gesture(self, test_only: bool = False):
         """Load DVSGesture dataset using the specialized gesture_dataset module.
 
-        In fwdPass mode each recording has its own number of frames (fixed Δt),
-        so X_train/X_test come back as 1-D object arrays of [T_i, H, W, 2] arrays.
+        In fwdPass mode X_train/X_test are dense [N, T, H, W, 2] arrays (with
+        delta_t framing every recording is cut to the same number of frames).
         ``test_only=True`` loads only the test split (train left empty).
         """
         from components.gesture_dataset import gesture_data
@@ -306,8 +306,8 @@ class TunerDataset:
     def load_roi_gesture(self, frame_size: int = 32, test_only: bool = False):
         """Load DVSGesture dataset using the specialized gesture_dataset module, with ROI.
 
-        In fwdPass mode X and pos come back as 1-D object arrays (variable T_i);
-        in fixed-frame modes they stack into dense arrays as before.
+        X and pos stack into dense arrays (with delta_t framing every recording
+        is cut to the same number of frames).
         ``test_only=True`` loads only the test split (train left empty).
         """
         from components.gesture_dataset import gesture_data
