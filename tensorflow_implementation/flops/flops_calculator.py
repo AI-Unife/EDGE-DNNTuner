@@ -94,7 +94,7 @@ def analyze_model(initial_model, input_shapes=None):
     if len(specs) == 1:
         concrete = tf.function(lambda x: model(x), autograph=False)
     else:
-        # For multiple inputs (e.g., dual ROI inputs), pass as a list
+        # For multiple inputs, pass as a list
         def call_model(*inputs):
             return model(list(inputs))
         concrete = tf.function(call_model, autograph=False)

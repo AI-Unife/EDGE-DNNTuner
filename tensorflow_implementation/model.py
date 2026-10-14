@@ -49,14 +49,12 @@ class TFModel(TunerModel):
     to_type_map[layers.Activation] = "activation"
     to_type_map["silu"] = LayerTypes.SiLU
 
-    def __init__(self, input_shape, params, n_classes, is_roi=False, pos_input_shape=None, layer_x_block=2):
+    def __init__(self, input_shape, params, n_classes, layer_x_block=2):
         super(TFModel, self).__init__()
         
         self.input_shape = input_shape
         self.params = params
         self.n_classes = n_classes
-        self.is_roi = is_roi
-        self.pos_input_shape = pos_input_shape
         self.residual = False # params.get("skip_connection", False)
         self.reg = params.get("reg_l2", False)
         self.da = params.get("data_augmentation", False)
@@ -129,14 +127,6 @@ class TFModel(TunerModel):
 
         x = GlobalAveragePooling2D()(x) if batch else Flatten()(x)
         
-        # If ROI dataset, concatenate flattened pos with x
-        pos_input = None
-        # Now concatenate pos input if ROI dataset
-        if self.is_roi:
-            pos_input = Input(shape=self.pos_input_shape, name="pos_input")
-            pos_flat = Flatten()(pos_input)
-            x = tf.keras.layers.Concatenate()([x, pos_flat])
-        
         added_fcs = [k for k in params if re.match(r"fc_\d+$", k) and params[k] > 0]
         for layer_key in sorted(added_fcs, key=lambda s: int(s.split("_")[-1])):  # stable order
             x = Dense(params[layer_key] * params['num_neurons'], kernel_regularizer=reg_layer)(x)
@@ -152,11 +142,7 @@ class TFModel(TunerModel):
 
         outputs = Dense(self.n_classes, kernel_regularizer=reg_layer, activation="softmax")(x)
 
-        # Build model with appropriate inputs
-        if self.is_roi and pos_input is not None:
-            self.model = Model(inputs=[inputs, pos_input], outputs=outputs)
-        else:
-            self.model = Model(inputs=inputs, outputs=outputs)
+        self.model = Model(inputs=inputs, outputs=outputs)
         
         self.create_specs()
    
