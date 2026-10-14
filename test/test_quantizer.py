@@ -9,12 +9,8 @@ from pathlib import Path
 
 args = {
     "epochs": 50,
-    "dataset": "cifar10", # choose between "tinyimagenet", "cifar10", "cifar100", "gesture"
+    "dataset": "cifar10", # choose between "tinyimagenet", "cifar10", "cifar100"
     "name": "test", # experiment dir name 
-    "frames": 16,
-    "mode": "fwdPass",
-    "channels": 2,
-    "polarity": "both",
     "seed": 42,
     "verbose": 2,
     "dataset_path": "./data", ## Choose your dataset path

@@ -1,8 +1,7 @@
 """
-Interactive wizard over the tuning-results analysis scripts: robustness_eval.py
-(robustness / time-profile), experiment_stats.py (accuracy / HW cost stats +
-scatter plot) and experiment_efficiency_stats.py (total time / bandwidth
-latency / discard ratio stats).
+Interactive wizard over the tuning-results analysis scripts: experiment_stats.py
+(accuracy / HW cost stats + scatter plot) and experiment_efficiency_stats.py
+(total time / bandwidth latency / discard ratio stats).
 
 It never duplicates any script's argument list or defaults -- it introspects
 that script's own build_parser() and asks one question per flag, in the same
@@ -22,9 +21,8 @@ import shlex
 import sys
 
 _SCRIPTS = {
-    "1": ("Robustness / time-profile (only gesture datasets)", "robustness_eval"),
-    "2": ("Accuracy / HW cost stats + scatter plot", "experiment_stats"),
-    "3": ("Efficiency stats (total time / bandwidth latency / discard ratio)", "experiment_efficiency_stats"),
+    "1": ("Accuracy / HW cost stats + scatter plot", "experiment_stats"),
+    "2": ("Efficiency stats (total time / bandwidth latency / discard ratio)", "experiment_efficiency_stats"),
 }
 
 

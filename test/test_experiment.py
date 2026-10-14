@@ -44,25 +44,15 @@ interactively if not passed on the command line). The TARGET activation
                             accuracy of the relu iterations vs the selu ones,
                             pick the winner automatically, then evaluate
                             Model/best-model.keras on the TEST SET ONLY (no
-                            retraining). For gesture / roigesture_* the test
-                            split is framed per --test-framing / config's
-                            test_framing (default: delta_t, variable #frames +
-                            majority vote; or frames, dense, config's frames).
-                            best-model.keras is evaluated as-is; pass
-                            --force-winner-activation to patch it to the winner
-                            when they differ. Optional: --delta-t <us>,
-                            --test-framing {frames,delta_t}.
+                            retraining). best-model.keras is evaluated as-is;
+                            pass --force-winner-activation to patch it to the
+                            winner when they differ.
 
   auto_activation_retrain  No --activation needed and NO saved model needed.
                             Same relu-vs-selu choice by logged accuracy, then
                             REBUILD that iteration's architecture from the logs
                             (hyper-neural.txt + layer_x_block), retrain it from
-                            scratch and test it. gesture / roigesture_* frame
-                            TRAIN per --train-framing (default: frames) and
-                            TEST per --test-framing (default: delta_t) —
-                            independently selectable. Optional: --delta-t <us>,
-                            --train-framing / --test-framing {frames,delta_t},
-                            --epochs, --backend.
+                            scratch and test it. Optional: --epochs, --backend.
 
 Steps (applied to each experiment directory):
   1) Load  the dataset described in the experiment's config.yaml
@@ -152,52 +142,8 @@ def _prompt_activation() -> str:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _detect_roi_frame_size(experiment: Path, saved_model=None) -> int:
-    """
-    Detect the spatial frame size (typically 16 or 32) used when preprocessing
-    an ROI gesture dataset.
-
-    Detection order:
-      1. From the loaded Keras model's input shape — the most reliable source:
-         the model was trained with frames of exactly that size.
-      2. From any SLURM .out file in the experiment or cwd: searches for the
-         first occurrence of "Building model with input_shape=(H," and reads H.
-      3. Default: 32.
-    """
-    if saved_model is not None:
-        try:
-            shape = saved_model.input_shape
-            if isinstance(shape, list):
-                shape = shape[0]
-            frame_size = int(shape[1])
-            print(f"[ROI frame size] Detected={frame_size} from saved model input shape {shape}.")
-            return frame_size
-        except Exception:
-            pass
-
-    pattern = re.compile(r"Building model with input_shape=\((\d+)")
-    for d in [experiment, Path(".")]:
-        for out_file in sorted(d.glob("*.out")):
-            try:
-                text = out_file.read_text(errors="replace")
-            except OSError:
-                continue
-            match = pattern.search(text)
-            if match:
-                frame_size = int(match.group(1))
-                print(f"[ROI frame size] Detected={frame_size} from '{out_file.name}'.")
-                return frame_size
-
-    print("[ROI frame size] Could not detect — using default=32.")
-    return 32
-
-
-def _load_dataset(dataset_name: str, frame_size: int = 32, test_only: bool = False):
-    """Instantiate and load the correct TunerDataset for the given dataset name.
-
-    ``test_only`` is honoured only for the DVSGesture datasets (gesture /
-    roigesture_*); the other loaders always build their full split.
-    """
+def _load_dataset(dataset_name: str):
+    """Instantiate and load the correct TunerDataset for the given dataset name."""
     from components.dataset import TunerDataset
 
     ds = TunerDataset()
@@ -211,10 +157,6 @@ def _load_dataset(dataset_name: str, frame_size: int = 32, test_only: bool = Fal
         ds.load_mnist()
     elif name in ("cifar10_light", "light_cifar", "light"):
         ds.load_light_cifar()
-    elif name == "gesture":
-        ds.load_gesture(test_only=test_only)
-    elif "roigesture" in name:
-        ds.load_roi_gesture(frame_size=frame_size, test_only=test_only)
     elif name == "tinyimagenet":
         ds.load_tiny_imagenet()
     elif name == "cca":
@@ -226,8 +168,8 @@ def _load_dataset(dataset_name: str, frame_size: int = 32, test_only: bool = Fal
     else:
         raise ValueError(
             f"Unknown dataset '{dataset_name}'. "
-            "Supported: cifar10, cifar100, mnist, beans, light, gesture, "
-            "roigesture_*, tinyimagenet, cca, cim."
+            "Supported: cifar10, cifar100, mnist, beans, light, "
+            "tinyimagenet, cca, cim."
         )
     return ds
 
@@ -596,10 +538,7 @@ def _eval_keras_model(model, dataset, cfg) -> tuple[float, float]:
     """
     Evaluate a Keras model loaded from disk against the test split.
 
-    Handles three dataset variants:
-      - Standard image datasets  (single input, integer or one-hot labels)
-      - ROI gesture datasets     (dual input: [image, position map])
-      - Temporal gesture datasets (frame-by-frame forward pass via test_utils)
+    Handles standard image datasets (single input, integer or one-hot labels).
 
     Returns:
         (loss, accuracy) as plain Python floats.
@@ -613,23 +552,11 @@ def _eval_keras_model(model, dataset, cfg) -> tuple[float, float]:
     if y_test.ndim == 1:
         y_test = tf.keras.utils.to_categorical(y_test, n_classes)
 
-    x_test = dataset.X_test
-    if getattr(x_test, "dtype", None) != object:
-        x_test = x_test.astype("float32")
+    x_test = dataset.X_test.astype("float32")
 
     model.compile(loss="categorical_crossentropy", optimizer="adam", metrics=["accuracy"])
 
-    is_roi = hasattr(dataset, "pos_test") and dataset.pos_test is not None
-    is_gesture = (cfg.mode in ("fwdPass", "hybrid")) and ("gesture" in cfg.dataset)
-
-    if is_gesture:
-        from test_utils import eval_model as gesture_eval
-        x_input = [x_test, dataset.pos_test] if is_roi else x_test
-        score = gesture_eval(model, x_input, y_test)
-    elif is_roi:
-        score = model.evaluate([x_test, dataset.pos_test.astype("float32")], y_test, verbose=2)
-    else:
-        score = model.evaluate(x_test, y_test, verbose=2)
+    score = model.evaluate(x_test, y_test, verbose=2)
 
     loss_val, acc_val = float(score[0]), float(score[1])
     print(f"[Saved model evaluation] loss={loss_val:.4f}  accuracy={acc_val:.4f}")
@@ -708,7 +635,7 @@ def _run_auto_activation_infer(experiment: Path, args) -> dict:
     """
     'auto_activation_infer': choose relu/selu by best logged accuracy, then
     evaluate Model/best-model.keras on the TEST SET ONLY (no retraining),
-    forcing the winning activation. Works for gesture and roigesture_*.
+    forcing the winning activation.
     """
     config_path = experiment / "config.yaml"
     if not config_path.exists():
@@ -718,19 +645,11 @@ def _run_auto_activation_infer(experiment: Path, args) -> dict:
     set_active_config(config_path)
     cfg = load_cfg(force=True)
 
-    # Optional Δt / test_framing override from the command line (in-memory only —
-    # this mode only reads the dataset, so there is nothing to persist to disk).
-    if getattr(args, "delta_t", None) is not None:
-        cfg["delta_t"] = int(args.delta_t)
-    if getattr(args, "test_framing", None) is not None:
-        cfg["test_framing"] = args.test_framing
-
     winner, cands = _auto_select_activation(experiment)
 
     print(f"\n{'='*60}")
     print(f"Experiment       : {experiment}")
     print(f"Dataset          : {cfg.dataset}")
-    print(f"Mode             : {cfg.mode}   delta_t: {cfg.delta_t}   test_framing: {cfg.test_framing}")
     print(f"Selection mode   : auto_activation_infer  (test set only)")
     print(f"{'='*60}")
     for a in SUPPORTED_ACTIVATIONS:
@@ -743,12 +662,8 @@ def _run_auto_activation_infer(experiment: Path, args) -> dict:
     print(f"  -> attivazione vincente: '{winner}'")
     print(f"{'='*60}\n")
 
-    roi_frame_size = 32
-    if "roigesture" in cfg.dataset.lower():
-        roi_frame_size = _detect_roi_frame_size(experiment)
-    print(f"[1] Loading TEST split of '{cfg.dataset}'" +
-          (f" (frame_size={roi_frame_size})" if "roigesture" in cfg.dataset.lower() else "") + "...")
-    dataset = _load_dataset(cfg.dataset, frame_size=roi_frame_size, test_only=True)
+    print(f"[1] Loading '{cfg.dataset}'...")
+    dataset = _load_dataset(cfg.dataset)
     dataset.data_as_float32()
     print(f"[1] {len(dataset.X_test)} test samples.")
 
@@ -855,11 +770,7 @@ def run_single_experiment(experiment: Path, args, mode: str, activation: str) ->
     set_active_config(config_path)
     cfg = load_cfg(force=True)
 
-    _delta_t = getattr(args, "delta_t", None)
-    _train_framing = getattr(args, "train_framing", None)
-    _test_framing = getattr(args, "test_framing", None)
-    if (args.epochs is not None or args.backend is not None or _delta_t is not None
-            or _train_framing is not None or _test_framing is not None):
+    if args.epochs is not None or args.backend is not None:
         import yaml
 
         with open(config_path, "r") as f:
@@ -868,40 +779,23 @@ def run_single_experiment(experiment: Path, args, mode: str, activation: str) ->
             raw["epochs"] = args.epochs
         if args.backend is not None:
             raw["backend"] = args.backend
-        if _delta_t is not None:
-            raw["delta_t"] = int(_delta_t)
-        if _train_framing is not None:
-            raw["train_framing"] = _train_framing
-        if _test_framing is not None:
-            raw["test_framing"] = _test_framing
         with open(config_path, "w") as f:
             yaml.safe_dump(raw, f, sort_keys=False, allow_unicode=True)
         cfg = reload_cfg()
-
-    def _framing_desc(framing: str) -> str:
-        return "fixed Δt (variable #frames)" if framing == "delta_t" else f"fixed {cfg.frames} frames"
 
     print(f"\n{'='*60}")
     print(f"Experiment       : {experiment}")
     print(f"Dataset          : {cfg.dataset}")
     print(f"Backend          : {cfg.backend}")
     print(f"Epochs           : {cfg.epochs}")
-    if cfg.mode == "fwdPass":
-        print(f"delta_t          : {cfg.delta_t}")
-        print(f"test_framing     : {cfg.test_framing}  ({_framing_desc(cfg.test_framing)})")
-        if do_retrain:
-            print(f"train_framing    : {cfg.train_framing}  ({_framing_desc(cfg.train_framing)})")
     print(f"Selection mode   : {mode}")
     print(f"Target activation: {activation}")
     print(f"Will retrain     : {do_retrain}")
     print(f"{'='*60}\n")
 
     # ── 1. Load the dataset ───────────────────────────────────────────────────
-    roi_frame_size = 32
-    print(f"\n[1] Loading dataset '{cfg.dataset}'" +
-          (f" (frame_size={roi_frame_size})" if "roigesture" in cfg.dataset.lower() else "") +
-          "...")
-    dataset = _load_dataset(cfg.dataset, frame_size=roi_frame_size)
+    print(f"\n[1] Loading dataset '{cfg.dataset}'...")
+    dataset = _load_dataset(cfg.dataset)
     dataset.data_as_float32()
     print(
         f"[1] Dataset loaded: "
@@ -1107,38 +1001,6 @@ def main():
             "selection logic: 'relu' or 'selu'. If omitted, you will be "
             "prompted interactively (only when needed). Ignored by "
             "'auto_activation_infer', which picks it automatically."
-        ),
-    )
-    parser.add_argument(
-        "--delta-t", type=int, default=None, dest="delta_t",
-        help=(
-            "Override delta_t (microseconds per frame) in the experiment's "
-            "config.yaml before (re)training/evaluating. Used by the "
-            "'auto_activation_*' modes and any retrain mode."
-        ),
-    )
-    parser.add_argument(
-        "--train-framing", type=str, default=None, choices=["frames", "delta_t"], dest="train_framing",
-        help=(
-            "fwdPass gesture/roigesture retrain only: how to frame the TRAINING "
-            "split. 'frames' (default) = fixed number of frames (config's "
-            "'frames'), i.e. a variable inter-frame time across recordings. "
-            "'delta_t' = fixed time window (config's delta_t), i.e. a variable "
-            "number of frames per recording. Independent of --test-framing. "
-            "If omitted, uses train_framing from config.yaml (default 'frames')."
-        ),
-    )
-    parser.add_argument(
-        "--test-framing", type=str, default=None, choices=["frames", "delta_t"], dest="test_framing",
-        help=(
-            "fwdPass gesture/roigesture: how to frame the TEST split, for both "
-            "evaluation-only modes (force_activation_infer, auto_activation_infer) "
-            "and the test-set evaluation done after any retrain. 'delta_t' "
-            "(default) = fixed time window (config's delta_t), variable number of "
-            "frames per recording, per-recording majority-vote accuracy. 'frames' "
-            "= fixed number of frames (config's 'frames'), dense, matching the old "
-            "pre-delta_t evaluation. Independent of --train-framing. If omitted, "
-            "uses test_framing from config.yaml (default 'delta_t')."
         ),
     )
     parser.add_argument(

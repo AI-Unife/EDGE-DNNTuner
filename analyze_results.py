@@ -945,18 +945,15 @@ def _load_dataset_for(dataset_name: str) -> TunerDataset:
         "cifar10_light": dataset.load_light_cifar,
         "light_cifar": dataset.load_light_cifar,
         "light": dataset.load_light_cifar,
-        "gesture": dataset.load_gesture,
         "tinyimagenet": dataset.load_tiny_imagenet,
         "cca": dataset.load_cca,
         "cim": dataset.load_cim,
     }
-    if "roigesture" in dataset_name:
-        dataset.load_roi_gesture()
-    elif dataset_name in loaders:
+    if dataset_name in loaders:
         loaders[dataset_name]()
     else:
-        print(f"Unknown dataset: {dataset_name}. Supported: cifar10, cifar100, mnist, light, gesture, "
-              f"roigesture_matrix, roigesture_coords, cca, cim.")
+        print(f"Unknown dataset: {dataset_name}. Supported: cifar10, cifar100, mnist, light, "
+              f"tinyimagenet, cca, cim.")
         exit(1)
     return dataset
 
