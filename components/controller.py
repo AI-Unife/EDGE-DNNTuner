@@ -86,8 +86,7 @@ class controller:
         lacc_dict: dict = {
             'cifar10': 0.10,
             'cifar100': 0.40,
-            'tiniimagenet': 0.30,
-            'gesture': 0.10
+            'tiniimagenet': 0.30
         }
         self.lacc: float = lacc_dict.get(self.exp_cfg.dataset, 0.20)
         self.hloss: float = np.log(self.dataset.n_classes)
@@ -155,7 +154,6 @@ class controller:
             int: maximum number of *additional* conv+pool blocks that can be appended.
         """
         # Extract (H, W) robustly from train_data:
-        # - gesture fwdPass/hybrid: (N, T, H, W, C)  -> H=shape[2], W=shape[3]
         # - generic images:         (N, H, W, C)     -> H=shape[1], W=shape[2]
         # - single sample:          (H, W, C)        -> H=shape[0], W=shape[1]
         td = getattr(self, "train_data", None)
@@ -167,10 +165,7 @@ class controller:
                 return 0
 
         dims = td.shape
-        if len(dims) >= 5:
-            # (N, T, H, W, C)
-            h, w = int(dims[2]), int(dims[3])
-        elif len(dims) == 4:
+        if len(dims) == 4:
             # (N, H, W, C)
             h, w = int(dims[1]), int(dims[2])
         elif len(dims) == 3:
@@ -317,8 +312,6 @@ class controller:
             print(f"[INFO] New Best Score: {self.score:.4f} (Previous: {self.best_score:.4f})")
             self.best_score = self.score
             self.best_iter = self.iter
-            if "gesture" in self.exp_cfg.dataset:
-                self.nn.save_model() # Helper function call
 
         # 7. Early Stopping Check
         if self.iter > self.best_iter + self.exp_cfg.early_stop:

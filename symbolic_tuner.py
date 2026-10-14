@@ -258,18 +258,6 @@ def parse_args() -> argparse.Namespace:
         help="Optimizer type for the analysis"
     )   
     
-    #### Gesture option
-    parser.add_argument("--frames", type=int, default=16,
-                        help="Number of frames for gesture dataset")
-    parser.add_argument("--mode", type=str, default="fwdPass",
-                        choices=["fwdPass", "depth", "hybrid"],
-                        help="Experiment mode (fwdPass, depth, hybrid)")
-    parser.add_argument("--channels", type=int, default=2,
-                        help="Number of channels for the dataset")
-    parser.add_argument("--polarity", type=str, default="both",
-                        choices=["both", "sum", "sub", "drop"],
-                        help="Polarity for event-based datasets")
-
 
     args = parser.parse_args()
 
@@ -333,10 +321,6 @@ if __name__ == "__main__":
         dataset.load_mnist()
     elif dataset_name == "cifar10_light" or dataset_name == "light_cifar" or dataset_name == "light":
         dataset.load_light_cifar()
-    elif dataset_name == "gesture":
-        dataset.load_gesture()
-    elif "roigesture" in dataset_name:
-        dataset.load_roi_gesture()
     elif dataset_name == "tinyimagenet":
         dataset.load_tiny_imagenet()
     elif dataset_name == "cca":
@@ -346,7 +330,7 @@ if __name__ == "__main__":
     elif dataset_name == "beans":
         dataset.load_beans()
     else:
-        print(f"Unknown dataset: {cfg.dataset}. Supported: cifar10, cifar100, mnist, beans, light, gesture, roigesture_matrix, roigesture_coords, cca, cim.")
+        print(f"Unknown dataset: {cfg.dataset}. Supported: cifar10, cifar100, mnist, beans, light, tinyimagenet, cca, cim.")
         exit(1)
 
     # --- 3. Controller and Space Setup ---
