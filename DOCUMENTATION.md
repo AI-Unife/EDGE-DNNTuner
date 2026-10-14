@@ -148,6 +148,11 @@ Symbolic_DNN-Tuner/
 │   ├── storing_experience.py  # Persistenza esperienza (SQLite)
 │   ├── tuning_rules_symbolic.py # Regole di mutazione architettura/HP
 │   ├── colors.py              # Costanti colore ANSI per terminale
+│   ├── optimizers/            # Strategie `opt`: registry + sampler
+│   │   ├── __init__.py        # Registry STRATEGIES e get_strategy()
+│   │   ├── base.py            # Interfaccia Sampler + dataclass OptStrategy
+│   │   ├── bo.py              # BOSampler (gp_minimize custom o skopt)
+│   │   └── random_search.py   # RSSampler (wrapper di components/random_search.py)
 │   └── bo/                    # Bayesian Optimization personalizzata
 │       ├── base.py            # Funzione base_minimize
 │       ├── gp.py              # gp_minimize (GP-based BO)
@@ -231,6 +236,13 @@ Il sistema di configurazione utilizza un `dataclass` (`ConfigSchema`) con valori
 | `basic`      | BO con regole simboliche ma senza espansione dello spazio base              |
 | `RS`         | Random Search pura senza regole simboliche                                  |
 | `RS_ruled`   | Random Search con regole simboliche e mutazione dello spazio                |
+
+Ogni strategia è dichiarata in `components/optimizers/__init__.py` (`STRATEGIES`) come
+`OptStrategy`: un sampler (`custom_bo`, `skopt_bo`, `random_search`), una politica dello
+spazio (`static`, `expand`, `replace`) e se applicare il filtro dei vincoli.
+`symbolic_tuner.py`, `search_space.py` ed `exp_config.py` leggono solo la strategia: una nuova
+combinazione è una riga nel registry, un nuovo algoritmo di ricerca è una nuova sottoclasse
+di `Sampler`.
 
 ### Ciclo di Vita della Configurazione
 

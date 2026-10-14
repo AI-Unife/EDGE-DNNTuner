@@ -4,6 +4,7 @@ from typing import Dict, Any
 import copy
 from skopt.space import Integer, Real, Categorical, Space
 from exp_config import load_cfg
+from components.optimizers import get_strategy
 
 class search_space:
     """
@@ -36,7 +37,8 @@ class search_space:
         Define the base search space reflecting the backbone of the neural network.
         Returns the created `skopt.space.Space`.
         """
-        self.big_space = (self.cfg.opt in ['standard', 'RS']) or ("bean" in self.cfg.dataset)
+        full_space = get_strategy(self.cfg.opt).full_space
+        self.big_space = full_space or ("bean" in self.cfg.dataset)
         self.search_space = Space([
             Categorical(name='num_neurons', categories=[8, 16, 32, 64]),
             Integer(1, 4,  name='unit_c1'),
@@ -46,9 +48,9 @@ class search_space:
             Categorical(categories=[8, 16, 32, 64],  name='batch_size'),
             Categorical(['Adam', 'Adamax', 'SGD', 'Adagrad', 'Adadelta'], name='optimizer'),
             Categorical(['relu', 'elu', 'selu', 'swish'], name='activation'), #, 'elu', 'selu', 'swish'
-            Categorical(name='data_augmentation', categories=[False, True] if self.cfg.opt in ['standard', 'RS'] else [False]),
-            Categorical(name="reg_l2", categories=[False, True] if self.cfg.opt in ['standard', 'RS'] else [False]),
-            Categorical(name="skip_connection", categories=[False, True] if self.cfg.opt in ['standard', 'RS'] else [False])
+            Categorical(name='data_augmentation', categories=[False, True] if full_space else [False]),
+            Categorical(name="reg_l2", categories=[False, True] if full_space else [False]),
+            Categorical(name="skip_connection", categories=[False, True] if full_space else [False])
         ])
         if self.big_space:
             for d in range(1,4):
@@ -56,13 +58,13 @@ class search_space:
                 self.search_space.dimensions.append(Integer(0, 32, name=dense_name))
         for b in range(1, max_block + 1):
             conv_name = f'new_conv_{b}'
-            if self.cfg.opt in ['standard', 'RS']:
+            if full_space:
                 self.search_space.dimensions.append(Integer(0, 16, name=conv_name))
             else:
                 self.search_space.dimensions.append(Integer(-1, 0, name=conv_name))
         for d in range(1, max_dense + 1):
             dense_name = f'new_fc_{d}'
-            if self.cfg.opt in ['standard', 'RS']:
+            if full_space:
                 self.search_space.dimensions.append(Integer(0, 32, name=dense_name))
             else:
                 self.search_space.dimensions.append(Integer(-1, 0, name=dense_name))

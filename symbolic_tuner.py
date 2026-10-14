@@ -13,7 +13,7 @@ from skopt.space import Categorical, Space
 from components.colors import colors
 from components.controller import controller
 from components.search_space import search_space
-from components.random_search import RandomSearch
+from components.optimizers import STRATEGIES, get_strategy
 from components.objFunction import ObjectiveWrapper
 from components.constraints import ConstraintsWrapper
 from components.dataset import TunerDataset
@@ -81,16 +81,14 @@ def print_space(space: Space) -> None:
 def run_optimization(base_space: Space, first_ss: search_space, ctrl: controller, max_iter: int):
     """
     Outer optimization loop:
-      - initialize (RS or BO),
+      - initialize the sampler of the configured opt strategy,
       - iteratively let the controller diagnose and (optionally) mutate the space,
       - reuse past evaluations when the space is unchanged,
       - checkpoint after each evaluation.
     """
     # --- 1. Initialization ---
     callback = None # CheckpointSaver(ckpt_path, compress=9)
-    no_rules = ["RS", "standard"]
-    with_rules = ["filtered", "RS_ruled", "basic"]
-    use_filter = (cfg.opt == "filtered")
+    strategy = get_strategy(cfg.opt)
 
     # const_space is the *dynamic* space, which may be mutated by rules.
     # base_space is the *static* reference, which we expand if new dims are found.
@@ -100,10 +98,7 @@ def run_optimization(base_space: Space, first_ss: search_space, ctrl: controller
     x0, y0 = [], []
     res = None
     
-    # Initialize the optimizer instance if using custom RandomSearch
-    random_search_optimizer = None
-    if "RS" in cfg.opt:
-        random_search_optimizer = RandomSearch(random_state=cfg.seed, total_iter=max_iter)
+    sampler = strategy.sampler_factory(cfg.seed, max_iter)
 
     # --- 2. Main Optimization Loop ---
     # We use ctrl.iter (which starts at 1) and loop *while* it's <= max_iter
@@ -115,6 +110,7 @@ def run_optimization(base_space: Space, first_ss: search_space, ctrl: controller
         # This ensures they capture the *current* const_space
         obj_fn = ObjectiveWrapper(const_space, ctrl)
         const_fn = ConstraintsWrapper(const_space)
+        space_constraint = const_fn.apply_constraints if strategy.use_filter else None
 
         if cfg.verbose > 0:
             print("Actual constrained space for this iteration:")
@@ -125,42 +121,14 @@ def run_optimization(base_space: Space, first_ss: search_space, ctrl: controller
         # --- 3. Run One Step of Optimization ---
         step3_t0 = time.perf_counter()
         try:
-            if "RS" in cfg.opt:
-                # Random search: draw one more sample/eval
-                res = random_search_optimizer(obj_fn.objective, const_space,
-                                              callback=callback
-                                              )
-            else:
-                # Bayesian Optimization: one call.
-                # If x0, y0 are empty, it's a "cold-start" (n_random_starts=1)
-                # If x0, y0 are present, it's a "warm-start" (n_random_starts=0)
-                is_warm_start = len(y0) > 0
-                res = gp_minimize(
-                    obj_fn.objective,
-                    base_space,  
-                    x0=list(x0) if is_warm_start else None,
-                    y0=list(y0) if is_warm_start else None,
-                    acq_func="EI",
-                    n_calls=1,
-                    n_random_starts= 0 if is_warm_start else 1,
-                    random_state=cfg.seed,
-                    callback=callback,
-                    space_constraint=const_fn.apply_constraints if use_filter else None
-                )
+            res = sampler.step(obj_fn.objective, base_space, const_space, x0, y0,
+                               space_constraint=space_constraint, callback=callback)
         except Exception as e:
-            # Fallback: If gp_minimize fails (e.g., matrix inversion),
+            # Fallback: If the step fails (e.g., GP matrix inversion),
             # try a random step to get new data.
             print(colors.FAIL, f"Optimization error: {e}. Retrying with a random sample.", colors.ENDC)
-            if "RS" in cfg.opt:
-                res = random_search_optimizer(obj_fn.objective, base_space, callback=callback)
-            else:
-                # Use standard gp_minimize with n_random_starts=1 to get a new point
-                res = gp_minimize(
-                    obj_fn.objective, base_space,
-                    acq_func="EI", n_calls=1, n_random_starts=1,
-                    random_state=cfg.seed, callback=callback,
-                    space_constraint=const_fn.apply_constraints if use_filter else None
-                )
+            res = sampler.fallback_step(obj_fn.objective, base_space,
+                                        space_constraint=space_constraint, callback=callback)
         step3_time = time.perf_counter() - step3_t0
         # obj_fn.objective() timed itself; the rest of step3_time is the search
         # algorithm's own overhead (acquisition + surrogate fitting), not evaluation.
@@ -173,16 +141,16 @@ def run_optimization(base_space: Space, first_ss: search_space, ctrl: controller
         # --- 4. Diagnosis and Space Update ---
         # Ask the controller to propose the *next* space based on this iteration
         symbolic_t0 = time.perf_counter()
-        if cfg.opt in no_rules:
-            # 'no_rules' means the space never changes -- no symbolic engine call
+        if not strategy.use_rules:
+            # Static space: it never changes -- no symbolic engine call
             next_space = copy.deepcopy(base_space)
         else:
-            # 'with_rules' means the controller diagnoses and mutates the space
+            # The controller diagnoses and mutates the space
             next_space = ctrl.diagnosis(const_space)
-            # Expand the base_space if the controller added new dimensions
-            if cfg.opt == 'basic':
+            if strategy.space_update == "replace":
                 base_space = next_space
             else:
+                # Expand the base_space if the controller added new dimensions
                 base_space = first_ss.expand_space(base_space, next_space)
         symbolic_time = time.perf_counter() - symbolic_t0
 
@@ -254,7 +222,7 @@ def parse_args() -> argparse.Namespace:
                         help="Max number of PARAMS")
     parser.add_argument(
         "--opt", type=str, default="filtered",
-        choices=["standard", "filtered", "basic", "RS", "RS_ruled"],
+        choices=list(STRATEGIES),
         help="Optimizer type for the analysis"
     )   
     
@@ -288,12 +256,6 @@ if __name__ == "__main__":
     cfg_path = create_config_file(exp_dir, overrides=args.__dict__)
     set_active_config(cfg_path)
     cfg = load_cfg(force=True)
-    
-    # Dynamically import the correct gp_minimize based on config
-    if cfg.opt == 'basic':
-        from skopt import gp_minimize
-    else:
-        from components.bo.gp import gp_minimize
     
     if cfg.backend == "tf":
         from tensorflow_implementation import module_backend, neural_network
