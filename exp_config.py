@@ -49,7 +49,8 @@ class ConfigSchema:
 
 # ---------------- Validation (same rules as the parser) ----------------
 _VALID_MODULES = {"hardware_module", "flops_module"}
-_VALID_OPT = {"standard", "filtered", "basic", "RS", "RS_ruled"}
+from components.optimizers import STRATEGIES
+_VALID_OPT = set(STRATEGIES)
 _VALID_BACKENDS = {"tf", "torch"}
 _VALID_DATASETS = {"light", "beans", "cifar10", "cifar100", "mnist", "tinyimagenet", "gesture", "roigesture_coords", "roigesture_matrix", "roigesture_3D", "cca", "cim"}
 
