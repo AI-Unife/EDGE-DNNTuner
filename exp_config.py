@@ -39,10 +39,11 @@ class ConfigSchema:
     # Gesture-specific parameters
     frames: int = 16                             # fwdPass: max sequence length (pad/truncate target); hybrid/depth: number of frames
     delta_t: int = 200000                        # fwdPass: microseconds per frame when framing with a fixed time window
+                                                  # (recordings cut to their first 1.5 s -> 1.5 s // delta_t frames)
     train_framing: str = "frames"                # fwdPass TRAIN split: "frames" (fixed #frames, config's frames) or
                                                   # "delta_t" (fixed time window, config's delta_t).
-    test_framing: str = "delta_t"                 # fwdPass TEST split: "delta_t" (fixed time window, variable #frames,
-                                                  # per-recording majority vote) or "frames" (fixed #frames, dense).
+    test_framing: str = "delta_t"                 # fwdPass TEST split: "delta_t" (fixed time window, config's delta_t)
+                                                  # or "frames" (fixed #frames, config's frames).
     mode: str = "fwdPass"                        # Experiment mode (fwdPass, depth, hybrid)
     channels: int = 2                            # Number of channels for the dataset
     polarity: str = "both"                       # Polarity for event-based datasets (both, sum, sub, drop)

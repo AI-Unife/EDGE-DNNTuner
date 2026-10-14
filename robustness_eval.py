@@ -26,7 +26,8 @@ Two window regimes, run back-to-back (``--window-ms 1000 0``):
   * no limit (``0``) — no crop, no discard: the full recording is used.
 
 Per recording we keep:
-  * the majority-vote prediction over the window  -> sequence accuracy;
+  * the soft majority-vote prediction over the window (argmax of the per-frame
+    probabilities averaged over time, as in training)  -> sequence accuracy;
   * the full per-frame prediction sequence        -> "stabilisation" frame,
     i.e. the index from which every later per-frame prediction is identical
     (no more oscillation). A model that stabilises at frame 2 rather than 4 is
@@ -108,6 +109,12 @@ import sys
 from pathlib import Path
 
 import numpy as np
+
+# Sequence vote used everywhere below (same as tensorflow_implementation/custom_train.py):
+# argmax of the per-frame probabilities averaged over the voted frames. Every CSV row
+# carries it in a "vote" column; rows from older runs (hard argmax-count vote) lack it
+# and are ignored when a previous run is loaded, so they are recomputed.
+VOTE = "soft"
 
 
 # ---------------------------------------------------------------------------
@@ -286,7 +293,7 @@ def _stabilisation_frame(seq: np.ndarray) -> int:
 
 
 def _infer_frames(model, data, pos, is_roi, chunk: int = 512):
-    """Per-frame logits [T, C], sub-batched so a long stack does not blow memory."""
+    """Per-frame probabilities [T, C] (softmax model output), sub-batched so a long stack does not blow memory."""
     out = []
     for s in range(0, len(data), chunk):
         d = data[s:s + chunk]
@@ -305,11 +312,11 @@ def _eval_at_dt(model, frame_iter, labels, is_roi: bool, dt_ms: float, n_classes
             data, pos = item
         else:
             data, pos = item, None
-        logits = _infer_frames(model, data, pos, is_roi)     # [T, C]
-        seq = logits.argmax(axis=1).astype(np.int64)         # [T]
+        probs = _infer_frames(model, data, pos, is_roi)      # [T, C]
+        seq = probs.argmax(axis=1).astype(np.int64)          # [T]
         if len(seq) == 0:
             continue
-        vote = int(np.bincount(seq, minlength=n_classes).argmax())
+        vote = int(probs.mean(axis=0).argmax())
         k_stab = _stabilisation_frame(seq)
         rows.append({
             "sample": k,
@@ -333,8 +340,8 @@ def _predict_sequences(model, frame_iter, labels, is_roi: bool):
     see _run_time_profile's raw-prediction cache (robustness_time_profile_raw.csv).
 
     Returns:
-        list of (seq, y_true) per recording, seq = [T_i] int array of the
-        per-frame predicted class (argmax of the logits).
+        list of (probs, y_true) per recording, probs = [T_i, C] per-frame
+        probabilities (needed by the soft vote).
     """
     sequences = []
     for item, y_true in zip(frame_iter, labels):
@@ -342,18 +349,17 @@ def _predict_sequences(model, frame_iter, labels, is_roi: bool):
             data, pos = item
         else:
             data, pos = item, None
-        logits = _infer_frames(model, data, pos, is_roi)         # [T, C]
-        seq = logits.argmax(axis=1).astype(np.int64)             # [T]
-        if len(seq) == 0:
+        probs = _infer_frames(model, data, pos, is_roi)          # [T, C]
+        if len(probs) == 0:
             continue
-        sequences.append((seq, int(y_true)))
+        sequences.append((probs.astype(np.float32), int(y_true)))
     return sequences
 
 
-def _vote_correctness(seq: np.ndarray, y_true: int, n_classes: int,
+def _vote_correctness(probs: np.ndarray, y_true: int, n_classes: int,
                        max_vote_frames: "int | None" = None) -> np.ndarray:
-    """Running majority-vote correctness for one recording's predicted-class
-    sequence, at every frame index k (0-based): True where the vote using
+    """Running soft-vote correctness for one recording's per-frame probabilities
+    [T, C], at every frame index k (0-based): True where the vote using
     frames seen so far (or only the last ``max_vote_frames`` of them, if
     given — a sliding window instead of accumulating since the start; e.g. 64
     to match a model trained on 64-frame sequences, so a long recording is
@@ -365,14 +371,14 @@ def _vote_correctness(seq: np.ndarray, y_true: int, n_classes: int,
     _predict_sequences), so re-running it with a different max_vote_frames
     costs nothing close to re-running the model.
     """
-    T = len(seq)
-    counts = np.zeros(n_classes, dtype=np.int64)
+    T = len(probs)
+    total = np.zeros(probs.shape[1], dtype=np.float64)
     correct = np.empty(T, dtype=bool)
     for k in range(T):
-        counts[seq[k]] += 1
+        total += probs[k]
         if max_vote_frames is not None and k >= max_vote_frames:
-            counts[seq[k - max_vote_frames]] -= 1  # slide the window: drop the oldest frame
-        vote = int(counts.argmax())
+            total -= probs[k - max_vote_frames]  # slide the window: drop the oldest frame
+        vote = int(total.argmax())
         correct[k] = (vote == y_true)
     return correct
 
@@ -394,7 +400,7 @@ def _accuracy_over_time(sequences, n_classes: int = 11, max_vote_frames: "int | 
     checkpoints, down to whichever recording(s) ran longest.
 
     Args:
-        sequences: list of (seq, y_true) per recording, from _predict_sequences.
+        sequences: list of (probs, y_true) per recording, from _predict_sequences.
         max_vote_frames: see _vote_correctness. None (default) keeps the
             original unbounded, since-the-beginning vote.
 
@@ -410,8 +416,8 @@ def _accuracy_over_time(sequences, n_classes: int = 11, max_vote_frames: "int | 
             e.g. to build the duration-normalised curve (see
             _accuracy_over_pct_duration) without re-running inference.
     """
-    per_sample_correct = [_vote_correctness(seq, y_true, n_classes, max_vote_frames)
-                           for seq, y_true in sequences]
+    per_sample_correct = [_vote_correctness(probs, y_true, n_classes, max_vote_frames)
+                           for probs, y_true in sequences]
 
     if not per_sample_correct:
         return np.zeros(0), np.zeros(0, dtype=int), []
@@ -666,7 +672,7 @@ _TIMEPROF_PCT_INT_FIELDS = {"n_samples", "max_vote_frames"}
 _TIMEPROF_PCT_FLOAT_FIELDS = {"dt_ms", "pct_duration", "accuracy"}
 _TIMEPROF_CF_INT_FIELDS = {"n_samples", "max_vote_frames"}
 _TIMEPROF_CF_FLOAT_FIELDS = {"dt_ms", "elapsed_ms", "accuracy"}
-_RAWPRED_INT_FIELDS = {"sample", "true", "frame", "pred"}
+_RAWPRED_INT_FIELDS = {"sample", "true", "frame", "pred"}   # + "probs": space-separated floats
 _RAWPRED_FLOAT_FIELDS = {"dt_ms"}
 
 
@@ -718,7 +724,12 @@ def _load_existing(out_dir: Path):
         with open(raw_path, newline="") as f:
             raw_predictions = [_coerce_row(r, _RAWPRED_INT_FIELDS, _RAWPRED_FLOAT_FIELDS)
                                 for r in csv.DictReader(f)]
-    return summ, per_sample, time_profile, time_profile_pct, time_profile_cf, raw_predictions
+    loaded = [summ, per_sample, time_profile, time_profile_pct, time_profile_cf, raw_predictions]
+    n_stale = sum(len(rows) for rows in loaded) - sum(r.get("vote") == VOTE for rows in loaded for r in rows)
+    if n_stale:
+        print(f"[cache] ignoring {n_stale} rows from {out_dir} computed with a different vote "
+              f"(not '{VOTE}') — they will be recomputed.")
+    return tuple([r for r in rows if r.get("vote") == VOTE] for rows in loaded)
 
 
 def _already_computed(existing_summ, kind: str, model: str, windows, inter_frame_ms) -> bool:
@@ -777,20 +788,20 @@ def _raw_predictions_already_computed(existing_raw, kind: str, model: str, dt_ms
 
 
 def _reconstruct_sequences(existing_raw, kind: str, model: str, dt_ms: float):
-    """Rebuild the list[(seq, y_true)] that _predict_sequences would have produced,
+    """Rebuild the list[(probs, y_true)] that _predict_sequences would have produced,
     from cached raw-prediction rows, so time-profile re-parametrization (a new
     max_vote_frames or --window-ms) never has to re-run the model."""
     by_sample = {}
     for r in existing_raw:
         if r.get("kind") != kind or r.get("model") != model or r.get("dt_ms") != dt_ms:
             continue
-        by_sample.setdefault(r["sample"], []).append((r["frame"], r["pred"], r["true"]))
+        by_sample.setdefault(r["sample"], []).append((r["frame"], r["probs"], r["true"]))
     sequences = []
     for sample in sorted(by_sample):
         frames = sorted(by_sample[sample], key=lambda t: t[0])
-        seq = np.array([pred for _, pred, _ in frames], dtype=np.int64)
+        probs = np.array([np.array(p.split(), dtype=np.float32) for _, p, _ in frames])
         y_true = frames[0][2]
-        sequences.append((seq, y_true))
+        sequences.append((probs, y_true))
     return sequences
 
 
@@ -798,11 +809,12 @@ def _raw_rows_from_sequences(sequences, kind: str, model: str, dt_ms: float):
     """The inverse of _reconstruct_sequences: flatten freshly computed sequences
     into cacheable per-frame rows."""
     rows = []
-    for sample, (seq, y_true) in enumerate(sequences):
-        for frame, pred in enumerate(seq):
+    for sample, (probs, y_true) in enumerate(sequences):
+        for frame, p in enumerate(probs):
             rows.append({
                 "kind": kind, "model": model, "dt_ms": dt_ms,
-                "sample": sample, "true": int(y_true), "frame": frame, "pred": int(pred),
+                "sample": sample, "true": int(y_true), "frame": frame, "pred": int(p.argmax()),
+                "probs": " ".join(f"{v:.6g}" for v in p),
             })
     return rows
 
@@ -811,19 +823,19 @@ def _write_summary_csvs(summ, per_sample, out_dir: Path):
     """robustness_summary.csv + robustness_per_sample.csv (the 'robustness' analysis)."""
     sfields = ["kind", "model", "window", "inter_frame_ms", "n_samples", "vote_acc",
                "per_frame_acc", "mean_n_frames", "stab_frame_p25", "stab_frame_p50",
-               "stab_frame_p75", "stab_ms_p25", "stab_ms_p50", "stab_ms_p75"]
+               "stab_frame_p75", "stab_ms_p25", "stab_ms_p50", "stab_ms_p75", "vote"]
     with open(out_dir / "robustness_summary.csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=sfields)
         w.writeheader()
         for s in summ:
-            w.writerow({k: s.get(k, "") for k in sfields})
+            w.writerow({**{k: s.get(k, "") for k in sfields}, "vote": VOTE})
     pfields = ["kind", "model", "window", "inter_frame_ms", "sample", "true", "pred_vote",
-               "correct", "n_frames", "per_frame_acc", "stab_frame", "stab_ms", "stable_label"]
+               "correct", "n_frames", "per_frame_acc", "stab_frame", "stab_ms", "stable_label", "vote"]
     with open(out_dir / "robustness_per_sample.csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=pfields)
         w.writeheader()
         for r in per_sample:
-            w.writerow({k: r.get(k, "") for k in pfields})
+            w.writerow({**{k: r.get(k, "") for k in pfields}, "vote": VOTE})
     print(f"  wrote {out_dir/'robustness_summary.csv'}")
     print(f"  wrote {out_dir/'robustness_per_sample.csv'}")
 
@@ -832,12 +844,12 @@ def _write_time_profile_csv(time_profile, out_dir: Path):
     """robustness_time_profile.csv (the 'time-profile' analysis)."""
     if not time_profile:
         return
-    tfields = ["kind", "model", "window", "dt_ms", "elapsed_ms", "accuracy", "n_samples", "max_vote_frames"]
+    tfields = ["kind", "model", "window", "dt_ms", "elapsed_ms", "accuracy", "n_samples", "max_vote_frames", "vote"]
     with open(out_dir / "robustness_time_profile.csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=tfields)
         w.writeheader()
         for r in time_profile:
-            w.writerow({k: r.get(k, "") for k in tfields})
+            w.writerow({**{k: r.get(k, "") for k in tfields}, "vote": VOTE})
     print(f"  wrote {out_dir/'robustness_time_profile.csv'}")
 
 
@@ -847,12 +859,12 @@ def _write_time_profile_pct_csv(time_profile_pct, out_dir: Path):
     100% point matches the 'robustness' analysis's full-window vote_acc)."""
     if not time_profile_pct:
         return
-    tfields = ["kind", "model", "dt_ms", "pct_duration", "accuracy", "n_samples", "max_vote_frames"]
+    tfields = ["kind", "model", "dt_ms", "pct_duration", "accuracy", "n_samples", "max_vote_frames", "vote"]
     with open(out_dir / "robustness_time_profile_pct.csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=tfields)
         w.writeheader()
         for r in time_profile_pct:
-            w.writerow({k: r.get(k, "") for k in tfields})
+            w.writerow({**{k: r.get(k, "") for k in tfields}, "vote": VOTE})
     print(f"  wrote {out_dir/'robustness_time_profile_pct.csv'}")
 
 
@@ -862,12 +874,12 @@ def _write_time_profile_carryforward_csv(time_profile_cf, out_dir: Path):
     vote forward instead of dropping out, so n_samples stays constant."""
     if not time_profile_cf:
         return
-    tfields = ["kind", "model", "window", "dt_ms", "elapsed_ms", "accuracy", "n_samples", "max_vote_frames"]
+    tfields = ["kind", "model", "window", "dt_ms", "elapsed_ms", "accuracy", "n_samples", "max_vote_frames", "vote"]
     with open(out_dir / "robustness_time_profile_carryforward.csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=tfields)
         w.writeheader()
         for r in time_profile_cf:
-            w.writerow({k: r.get(k, "") for k in tfields})
+            w.writerow({**{k: r.get(k, "") for k in tfields}, "vote": VOTE})
     print(f"  wrote {out_dir/'robustness_time_profile_carryforward.csv'}")
 
 
@@ -878,12 +890,12 @@ def _write_raw_predictions_csv(raw_predictions, out_dir: Path):
     re-parametrizing the vote never re-runs the model (see _reconstruct_sequences)."""
     if not raw_predictions:
         return
-    rfields = ["kind", "model", "dt_ms", "sample", "true", "frame", "pred"]
+    rfields = ["kind", "model", "dt_ms", "sample", "true", "frame", "pred", "probs", "vote"]
     with open(out_dir / "robustness_time_profile_raw.csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=rfields)
         w.writeheader()
         for r in raw_predictions:
-            w.writerow({k: r.get(k, "") for k in rfields})
+            w.writerow({**{k: r.get(k, "") for k in rfields}, "vote": VOTE})
     print(f"  wrote {out_dir/'robustness_time_profile_raw.csv'}")
 
 

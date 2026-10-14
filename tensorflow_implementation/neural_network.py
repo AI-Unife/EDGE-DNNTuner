@@ -148,11 +148,7 @@ class NeuralNetwork(BaseNeuralNetwork):
         super().__init__(backend, dataset, da, reg, residual)
         # Framework-specific preprocessing.
         # Y_train and Y_test are converted independently (each only if it is still
-        # raw int labels, ndim==1): with train_framing/test_framing selectable
-        # separately, one split can be ragged (int labels) while the other is
-        # dense/time-coded ([N, T, C], ndim==3) — tying the conversion to a single
-        # split's ndim would wrongly feed an already one-hot/time-coded array into
-        # to_categorical.
+        # raw int labels, ndim==1).
         if self.dataset.n_classes > 1:
             if self.dataset.Y_train.ndim == 1:
                 self.dataset.Y_train = tf.keras.utils.to_categorical(self.dataset.Y_train, self.dataset.n_classes)

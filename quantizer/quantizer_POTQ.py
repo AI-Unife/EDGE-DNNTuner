@@ -152,7 +152,7 @@ class quantizer_module(quantizer_interface):
                 
         ### ADD this part to manage gesture dataset evaluation
         if (self.cfg.mode in ("fwdPass", "hybrid")) and "gesture" in self.cfg.dataset:
-            from components.custom_train import eval_model
+            from tensorflow_implementation.custom_train import eval_model
             self.score = eval_model(self.quantized_model, x_test, y_test)
         else:
             self.score = self.quantized_model.evaluate(x_test, y_test, verbose=2)
