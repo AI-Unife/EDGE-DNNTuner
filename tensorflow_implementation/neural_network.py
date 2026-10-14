@@ -146,10 +146,18 @@ class LayerWiseLR(Optimizer):
 class NeuralNetwork(BaseNeuralNetwork):
     def __init__(self, backend:BackendInterface, dataset: TunerDataset, da: bool, reg: bool, residual: bool):
         super().__init__(backend, dataset, da, reg, residual)
-        # Framework-specific preprocessing
-        if self.dataset.n_classes > 1 and self.dataset.Y_train.ndim == 1:
-            self.dataset.Y_train = tf.keras.utils.to_categorical(self.dataset.Y_train, self.dataset.n_classes)
-            self.dataset.Y_test = tf.keras.utils.to_categorical(self.dataset.Y_test, self.dataset.n_classes)
+        # Framework-specific preprocessing.
+        # Y_train and Y_test are converted independently (each only if it is still
+        # raw int labels, ndim==1): with train_framing/test_framing selectable
+        # separately, one split can be ragged (int labels) while the other is
+        # dense/time-coded ([N, T, C], ndim==3) — tying the conversion to a single
+        # split's ndim would wrongly feed an already one-hot/time-coded array into
+        # to_categorical.
+        if self.dataset.n_classes > 1:
+            if self.dataset.Y_train.ndim == 1:
+                self.dataset.Y_train = tf.keras.utils.to_categorical(self.dataset.Y_train, self.dataset.n_classes)
+            if self.dataset.Y_test.ndim == 1:
+                self.dataset.Y_test = tf.keras.utils.to_categorical(self.dataset.Y_test, self.dataset.n_classes)
         if self.dataset.X_train.ndim == 3:
             self.dataset.X_train = self.dataset.X_train[..., None]
             self.dataset.X_test = self.dataset.X_test[..., None]
@@ -169,9 +177,17 @@ class NeuralNetwork(BaseNeuralNetwork):
         """
         # 1) clear session
         tf.keras.backend.clear_session()
+
+        def _per_frame_shape(arr):
+            """(H, W, C) whether arr is a dense [N, T, H, W, C] array or a 1-D
+            object array of variable-length [T_i, H, W, C] sequences."""
+            if getattr(arr, "dtype", None) == object:
+                return tuple(np.asarray(arr[0]).shape[1:])
+            return tuple(arr.shape[2:])
+
         if (self.exp_cfg.mode in ("fwdPass", "hybrid")) and "gesture" in self.exp_cfg.dataset :
-            input_shape = self.dataset.X_train.shape[2:]  # (H, W, C) for gesture pipeline
-            pos_input_shape = self.dataset.pos_train.shape[2:] if self.is_roi else None
+            input_shape = _per_frame_shape(self.dataset.X_train)  # (H, W, C) for gesture pipeline
+            pos_input_shape = _per_frame_shape(self.dataset.pos_train) if self.is_roi else None
         else:
             input_shape = self.dataset.X_train.shape[1:]  # generic (H, W, C)
             pos_input_shape = self.dataset.pos_train.shape[1:] if self.is_roi else None
@@ -192,9 +208,9 @@ class NeuralNetwork(BaseNeuralNetwork):
         # Compute FLOPs (approximate; counts MACs as 2 FLOPs)
         # Use same shape logic as build_network: shape[2:] for gesture fwdPass/hybrid data
         if (self.exp_cfg.mode in ("fwdPass", "hybrid")) and "gesture" in self.exp_cfg.dataset:
-            data_shape = self.dataset.X_train.shape[2:]
+            data_shape = _per_frame_shape(self.dataset.X_train)
             if self.is_roi:
-                pos_shape = self.dataset.pos_train.shape[2:]
+                pos_shape = _per_frame_shape(self.dataset.pos_train)
         else:
             data_shape = self.dataset.X_train.shape[1:]
             if self.is_roi:
@@ -277,7 +293,7 @@ class NeuralNetwork(BaseNeuralNetwork):
         self.model.optimizer = opt
 
         # --- Callbacks ---
-        es = EarlyStopping(monitor="val_accuracy", min_delta=0.005, patience=50, verbose=1,
+        es = EarlyStopping(monitor="val_accuracy", min_delta=0.005, patience=30, verbose=1,
                             mode="max", restore_best_weights=True)
         # --- Compile ---
         self.model.model.compile(loss="categorical_crossentropy", optimizer=opt, metrics=["accuracy"])

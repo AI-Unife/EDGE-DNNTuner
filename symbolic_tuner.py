@@ -109,6 +109,7 @@ def run_optimization(base_space: Space, first_ss: search_space, ctrl: controller
     # We use ctrl.iter (which starts at 1) and loop *while* it's <= max_iter
     while ctrl.iter <= max_iter and not ctrl.convergence:
         print(colors.MAGENTA, f"--- ITERATION {ctrl.iter} ---", colors.ENDC)
+        iter_t0 = time.perf_counter()
 
         # (Re)create the objective and constraint functions for this iteration.
         # This ensures they capture the *current* const_space
@@ -122,6 +123,7 @@ def run_optimization(base_space: Space, first_ss: search_space, ctrl: controller
         #     print_space(base_space)
 
         # --- 3. Run One Step of Optimization ---
+        step3_t0 = time.perf_counter()
         try:
             if "RS" in cfg.opt:
                 # Random search: draw one more sample/eval
@@ -159,14 +161,20 @@ def run_optimization(base_space: Space, first_ss: search_space, ctrl: controller
                     random_state=cfg.seed, callback=callback,
                     space_constraint=const_fn.apply_constraints if use_filter else None
                 )
-        
+        step3_time = time.perf_counter() - step3_t0
+        # obj_fn.objective() timed itself; the rest of step3_time is the search
+        # algorithm's own overhead (acquisition + surrogate fitting), not evaluation.
+        training_time = obj_fn.last_call_time
+        search_time = max(0.0, step3_time - training_time)
+
         # Update our history of points
         x0, y0 = res.x_iters, res.func_vals
 
         # --- 4. Diagnosis and Space Update ---
         # Ask the controller to propose the *next* space based on this iteration
+        symbolic_t0 = time.perf_counter()
         if cfg.opt in no_rules:
-            # 'no_rules' means the space never changes
+            # 'no_rules' means the space never changes -- no symbolic engine call
             next_space = copy.deepcopy(base_space)
         else:
             # 'with_rules' means the controller diagnoses and mutates the space
@@ -176,6 +184,7 @@ def run_optimization(base_space: Space, first_ss: search_space, ctrl: controller
                 base_space = next_space
             else:
                 base_space = first_ss.expand_space(base_space, next_space)
+        symbolic_time = time.perf_counter() - symbolic_t0
 
         # --- 5. Check for Space Change (This is the critical bug fix) ---
         if len(next_space.dimensions) != len(const_space.dimensions):
@@ -187,8 +196,12 @@ def run_optimization(base_space: Space, first_ss: search_space, ctrl: controller
         # The space for the *next* iteration is the one just diagnosed
         const_space = copy.deepcopy(next_space)
 
+        # --- 6. Timing log for this iteration ---
+        total_time = time.perf_counter() - iter_t0
+        ctrl.log_timing(total_time, search_time, symbolic_time, training_time)
+
         # Note: ctrl.iter is incremented *inside* ctrl.training()
-    
+
     print(colors.OKGREEN, "\nOptimization loop finished.", colors.ENDC)
     return res
 

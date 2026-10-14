@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Tuple, Optional
 
+import numpy as np
 import tensorflow as tf
 from tqdm import tqdm
 
@@ -46,6 +47,143 @@ def accuracy(outputs: tf.Tensor, targets: tf.Tensor) -> float:
 
 
 # -----------------------------------------------------------------------------
+# Training — variable-length sequences (fixed-Δt framing)
+# -----------------------------------------------------------------------------
+
+def _train_model_ragged(
+    model, optimizer, train_data, train_labels, test_data, test_labels,
+    epochs: int, params: Dict, callbacks: List, is_roi: bool,
+) -> Dict[str, List[float]]:
+    """
+    Custom loop for recordings with a per-sample number of frames T_i.
+
+    Each batch is padded to its own max T (tf.data.padded_batch); a length-derived
+    mask keeps padded frames out of the loss and out of the majority vote. The
+    per-recording label is broadcast over that recording's frames.
+    """
+    batch_size = int(params["batch_size"])
+    clipnorm: Optional[float] = params.get("clipnorm")
+    clipvalue: Optional[float] = params.get("clipvalue")
+
+    data_arr, pos_arr = (train_data if is_roi else (train_data, None))
+
+    y_arr = np.asarray(train_labels)
+    if y_arr.ndim == 3:                      # [N, T, C] -> [N, C]
+        y_arr = y_arr[:, 0, :]
+    if y_arr.ndim == 1:                      # [N] -> [N, C]
+        n_classes = int(model.output_shape[-1])
+        y_arr = np.eye(n_classes, dtype=np.float32)[y_arr.astype(int)]
+    y_arr = y_arr.astype(np.float32)
+    n_classes = int(y_arr.shape[1])
+
+    frame_shape = tuple(np.asarray(data_arr[0]).shape[1:])          # (H, W, C)
+    pos_shape = tuple(np.asarray(pos_arr[0]).shape[1:]) if is_roi else None
+
+    def _gen():
+        for i in range(len(data_arr)):
+            xi = np.asarray(data_arr[i], np.float32)
+            if is_roi:
+                yield xi, np.asarray(pos_arr[i], np.float32), np.int32(xi.shape[0]), y_arr[i]
+            else:
+                yield xi, np.int32(xi.shape[0]), y_arr[i]
+
+    if is_roi:
+        sig = (tf.TensorSpec((None,) + frame_shape, tf.float32),
+               tf.TensorSpec((None,) + pos_shape, tf.float32),
+               tf.TensorSpec((), tf.int32),
+               tf.TensorSpec((n_classes,), tf.float32))
+    else:
+        sig = (tf.TensorSpec((None,) + frame_shape, tf.float32),
+               tf.TensorSpec((), tf.int32),
+               tf.TensorSpec((n_classes,), tf.float32))
+
+    ds = (tf.data.Dataset.from_generator(_gen, output_signature=sig)
+          .shuffle(min(len(data_arr), 512), reshuffle_each_iteration=True)
+          .padded_batch(batch_size))
+
+    ce_none = tf.keras.losses.CategoricalCrossentropy(from_logits=True, reduction="none")
+    out_dtype = tf.as_dtype(getattr(model, "compute_dtype", tf.float32))
+
+    @tf.function(reduce_retracing=True)
+    def train_step(bx, blen, by, bpos=None):
+        t_max = tf.shape(bx)[1]
+        mask = tf.sequence_mask(blen, t_max, dtype=tf.float32)          # [b, Tmax]
+        with tf.GradientTape() as tape:
+            ta = tf.TensorArray(out_dtype, size=t_max)
+            for t in tf.range(t_max):
+                if is_roi:
+                    ot = model([bx[:, t], bpos[:, t]], training=True)
+                else:
+                    ot = model(bx[:, t], training=True)
+                ta = ta.write(t, ot)
+            outputs = tf.transpose(ta.stack(), perm=[1, 0, 2])          # [b, Tmax, C]
+            by_bt = tf.tile(by[:, None, :], [1, t_max, 1])              # [b, Tmax, C]
+            ce = ce_none(by_bt, outputs)                                # [b, Tmax]
+            loss = tf.reduce_sum(ce * mask) / tf.maximum(tf.reduce_sum(mask), 1.0)
+
+        grads = tape.gradient(loss, model.trainable_variables)
+        if clipnorm is not None:
+            grads = [tf.clip_by_norm(g, clipnorm) if g is not None else None for g in grads]
+        if clipvalue is not None:
+            grads = [tf.clip_by_value(g, -clipvalue, clipvalue) if g is not None else None for g in grads]
+        optimizer.apply_gradients(zip(grads, model.trainable_variables))
+
+        # majority vote over valid frames only
+        pred = tf.argmax(outputs, axis=2, output_type=tf.int32)         # [b, Tmax]
+        oh = tf.one_hot(pred, n_classes, dtype=tf.float32)              # [b, Tmax, C]
+        counts = tf.reduce_sum(oh * mask[:, :, None], axis=1)           # [b, C]
+        pmode = tf.argmax(counts, axis=1, output_type=tf.int32)
+        tmode = tf.argmax(by, axis=1, output_type=tf.int32)
+        acc = tf.reduce_mean(tf.cast(tf.equal(pmode, tmode), tf.float32))
+        return loss, acc
+
+    history = {k: [] for k in ["loss", "accuracy", "val_loss", "val_accuracy"]}
+    for cb in callbacks:
+        cb.set_model(model)
+        cb.on_train_begin()
+
+    for epoch in range(epochs):
+        for cb in callbacks:
+            cb.on_epoch_begin(epoch)
+        print(f"Epoch {epoch + 1}/{epochs}")
+
+        loss_sum = acc_sum = 0.0
+        n_batches = 0
+        for batch in tqdm(ds, leave=False):
+            if is_roi:
+                bx, bpos, blen, by = batch
+                l, a = train_step(bx, blen, by, bpos)
+            else:
+                bx, blen, by = batch
+                l, a = train_step(bx, blen, by)
+            loss_sum += float(l.numpy())
+            acc_sum += float(a.numpy())
+            n_batches += 1
+
+        avg_loss = loss_sum / max(n_batches, 1)
+        avg_acc = acc_sum / max(n_batches, 1)
+        val_loss, val_acc = eval_model(model, test_data, test_labels)
+
+        history["loss"].append(avg_loss)
+        history["accuracy"].append(avg_acc)
+        history["val_loss"].append(val_loss)
+        history["val_accuracy"].append(val_acc)
+        print(f"Epoch {epoch + 1}/{epochs} - Loss: {avg_loss:.4f}, Accuracy: {avg_acc:.4f}, "
+              f"Val Loss: {val_loss:.4f}, Val Accuracy: {val_acc:.4f}")
+
+        logs = {"loss": avg_loss, "accuracy": avg_acc, "val_loss": val_loss, "val_accuracy": val_acc}
+        for cb in callbacks:
+            cb.on_epoch_end(epoch, logs)
+        if model.stop_training:
+            print(f"Stopping training at epoch {epoch + 1}/{epochs} (EarlyStopping triggered)")
+            break
+
+    for cb in callbacks:
+        cb.on_train_end()
+    return history
+
+
+# -----------------------------------------------------------------------------
 # Training
 # -----------------------------------------------------------------------------
 
@@ -80,10 +218,18 @@ def train_model(
     # Data pipeline (simple & deterministic; enable shuffle if needed)
     # -------------------------------------------------------------------------
     batch_size = int(params["batch_size"])
-    
+
     # Check if this is a ROI dataset (list with two arrays)
     is_roi = isinstance(train_data, list) and len(train_data) == 2
-    
+
+    # Variable-length sequences (fixed-Δt framing) -> object arrays -> dedicated loop.
+    _probe = train_data[0] if is_roi else train_data
+    if getattr(_probe, "dtype", None) == object:
+        return _train_model_ragged(
+            model, optimizer, train_data, train_labels, test_data, test_labels,
+            epochs, params, callbacks, is_roi,
+        )
+
     if is_roi:
         # ROI case: train_data = [data, pos]
         data_array, pos_array = train_data
@@ -209,25 +355,8 @@ def train_model(
         history["loss"].append(avg_loss)
         history["accuracy"].append(avg_acc)
 
-        # Validation (full tensor, frame-wise forward)
-        if is_roi:
-            test_data_array, test_pos_array = test_data
-            time_steps_val = test_data_array.shape[1]
-            outputs_val_list = []
-            for t in range(time_steps_val):
-                outputs_val_list.append(model([test_data_array[:, t], test_pos_array[:, t]], training=False))
-            val_outputs = tf.stack(outputs_val_list, axis=1)  # [B_val, T, C]
-        else:
-            time_steps_val = test_data.shape[1]
-            outputs_val_list = []
-            for t in range(time_steps_val):
-                outputs_val_list.append(model(test_data[:, t], training=False))
-            val_outputs = tf.stack(outputs_val_list, axis=1)  # [B_val, T, C]
-        
-        val_loss = float(tf.keras.losses.categorical_crossentropy(
-            test_labels, val_outputs, from_logits=True
-        ).numpy().mean())
-        val_acc = accuracy(val_outputs, test_labels)
+        # Validation — per recording (handles a fixed-Δt / variable-length test set)
+        val_loss, val_acc = eval_model(model, test_data, test_labels)
 
         history["val_loss"].append(val_loss)
         history["val_accuracy"].append(val_acc)
@@ -258,42 +387,58 @@ def train_model(
 # Evaluation
 # -----------------------------------------------------------------------------
 
-def eval_model(model: tf.keras.Model, X, y: tf.Tensor) -> Tuple[float, float]:
+def eval_model(model: tf.keras.Model, X, y) -> Tuple[float, float]:
     """
-    Evaluate a trained model on a temporal batch:
-      - unroll over time, stack outputs to [B, T, C]
-      - compute CategoricalCrossentropy(from_logits=True)
-      - compute sequence-level majority-vote accuracy
-    
+    Frame-by-frame evaluation, one recording at a time (handles a per-sample
+    number of frames T_i). Dense [B, T, ...] input also works — each row is
+    just iterated as a [T, ...] stack.
+
+      - run the model on the [T_i, H, W, C] stack -> [T_i, C] logits
+      - sequence prediction = majority vote over per-frame argmax
+      - sequence loss = CategoricalCrossentropy with the clip label over T_i frames
+
     Args:
-        model: Keras model
-        X: Test data (array or [data, pos] list for ROI)
-        y: Test labels [B, T, C]
+        model: per-frame Keras classifier (logits output).
+        X: object/dense array of [T_i, H, W, C] frames, or [data, pos] for ROI.
+        y: clip labels as [B], [B, C] one-hot, or [B, T, C] time-repeated one-hot.
 
     Returns:
-        (val_loss, val_accuracy)
+        (mean_loss, sequence_accuracy)
     """
-    # Handle ROI vs regular input
     if isinstance(X, list) and len(X) == 2:
         X_data, X_pos = X
         is_roi = True
     else:
-        X_data = X
-        X_pos = None
-        is_roi = False
-    
-    time_steps = X_data.shape[1]
-    outputs_val_list = []
+        X_data, X_pos, is_roi = X, None, False
+
+    y = np.asarray(y)
+    if y.ndim == 3:
+        y_true = y[:, 0, :].argmax(axis=1)
+        n_classes = int(y.shape[2])
+    elif y.ndim == 2:
+        y_true = y.argmax(axis=1)
+        n_classes = int(y.shape[1])
+    else:
+        y_true = y.astype(int)
+        n_classes = int(model.output_shape[-1])
+
     loss_fn = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
+    preds = np.empty(len(X_data), dtype=int)
+    losses = np.empty(len(X_data), dtype=float)
 
-    for t in range(time_steps):
+    for i in range(len(X_data)):
+        xi = tf.convert_to_tensor(np.asarray(X_data[i], dtype=np.float32))   # [T_i, H, W, C]
         if is_roi:
-            outputs_val_list.append(model([X_data[:, t], X_pos[:, t]], training=False))
+            pi = tf.convert_to_tensor(np.asarray(X_pos[i], dtype=np.float32))
+            out_i = model([xi, pi], training=False)
         else:
-            outputs_val_list.append(model(X_data[:, t], training=False))
+            out_i = model(xi, training=False)
+        out_i = tf.convert_to_tensor(out_i)                                 # [T_i, C]
 
-    val_outputs = tf.stack(outputs_val_list, axis=1)  # [B, T, C]
-    val_loss = float(loss_fn(y, val_outputs).numpy())
-    val_acc = accuracy(val_outputs, y)
+        frame_pred = tf.argmax(out_i, axis=-1, output_type=tf.int32).numpy()
+        preds[i] = np.bincount(frame_pred, minlength=n_classes).argmax()
 
-    return val_loss, val_acc
+        yi = tf.one_hot(np.full(int(out_i.shape[0]), y_true[i], dtype=np.int32), n_classes)
+        losses[i] = float(loss_fn(yi, out_i).numpy())
+
+    return float(losses.mean()), float((preds == y_true).mean())
