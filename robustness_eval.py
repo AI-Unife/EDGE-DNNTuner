@@ -294,6 +294,11 @@ def _stabilisation_frame(seq: np.ndarray) -> int:
 
 def _infer_frames(model, data, pos, is_roi, chunk: int = 512):
     """Per-frame probabilities [T, C] (softmax model output), sub-batched so a long stack does not blow memory."""
+    if is_roi and len(model.inputs) == 1:
+        # roigesture_matrix models take the position map as an extra input channel;
+        # older matrix models (and coords models) have a separate pos input.
+        data = np.concatenate([data, pos], axis=-1)
+        is_roi = False
     out = []
     for s in range(0, len(data), chunk):
         d = data[s:s + chunk]

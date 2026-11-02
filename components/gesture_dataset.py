@@ -386,7 +386,13 @@ def dataset_to_numpy(dataset, cfg, delta_t_framing: bool = True) -> Tuple[np.nda
                     
                     x_list.append({"data": x_reshaped, "pos": pos_mean})
             elif cfg.dataset == "roigesture_matrix":
-                x_list.append({"data": x_reshaped, "pos":pos})
+                # The position map is an extra input channel: [.., H, W, 2] + [.., H, W, 1]
+                # -> [.., H, W, 3], so it goes through the convolutional layers together
+                # with the events (single-input model, no separate ROI branch).
+                if pos is None or pos.shape[:-1] != x_reshaped.shape[:-1]:
+                    raise ValueError(f"roigesture_matrix: position map {None if pos is None else pos.shape} "
+                                     f"does not match the event frames {x_reshaped.shape}")
+                x_list.append(np.concatenate([x_reshaped, pos.astype(x_reshaped.dtype)], axis=-1))
             else:
                 print(f"ERROR: Unrecognized ROI dataset type '{cfg.dataset}'; expected 'roigesture_coords', 'roigesture_matrix'.")
                 exit(-1)

@@ -625,6 +625,10 @@ def _eval_keras_model(model, dataset, cfg) -> tuple[float, float]:
     if is_gesture:
         from test_utils import eval_model as gesture_eval
         x_input = [x_test, dataset.pos_test] if is_roi else x_test
+        if not is_roi and cfg.dataset == "roigesture_matrix" and len(model.inputs) == 2:
+            # Model saved before the position map became an extra input channel:
+            # split it back out of X ([.., 2 event channels | 1 position channel]).
+            x_input = [x_test[..., :-1], x_test[..., -1:]]
         score = gesture_eval(model, x_input, y_test)
     elif is_roi:
         score = model.evaluate([x_test, dataset.pos_test.astype("float32")], y_test, verbose=2)

@@ -307,7 +307,8 @@ class TunerDataset:
         """Load DVSGesture dataset using the specialized gesture_dataset module, with ROI.
 
         X and pos stack into dense arrays (with delta_t framing every recording
-        is cut to the same number of frames).
+        is cut to the same number of frames). For roigesture_matrix the position
+        map is already an extra channel of X, so pos_train/pos_test are not set.
         ``test_only=True`` loads only the test split (train left empty).
         """
         from components.gesture_dataset import gesture_data
