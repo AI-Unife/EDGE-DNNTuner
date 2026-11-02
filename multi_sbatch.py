@@ -42,7 +42,7 @@ def generate_params_file(output_path: str = "params.txt"):
     Generate a params.txt file for job arrays, where each line is a parameter combination
     starting from 'gesture'. Ignores prefixes and IDs.
     """
-    datasets = ["roigesture_matrix", "roigesture_coords", "gesture"] # "roigesture_matrix", "roigesture_coords", 
+    datasets = ["roigesture_matrix"] # "roigesture_matrix", "roigesture_coords", 
     params_th = [1000000, 10000000000]  # 1M and 100G params, for example
     seeds = [42, 7, 96]  # Example seeds
 
