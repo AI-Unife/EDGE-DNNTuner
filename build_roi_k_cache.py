@@ -5,6 +5,8 @@ roigesture_conv1d and roigesture_channels share the same cache
 so it is built once per pair BEFORE the job array: concurrent jobs writing the
 same tonic DiskCachedDataset files could corrupt them (unreadable samples are
 then silently skipped by dataset_to_numpy).
+On success it writes <cache folder>/.complete, so slurm/submit_roi_k.sh does
+not rebuild that pair again.
 
 Usage:
     python build_roi_k_cache.py --delta_t 10000 --roi_k 10
@@ -13,6 +15,8 @@ import argparse
 from pathlib import Path
 
 from exp_config import create_config_file, set_active_config, load_cfg
+
+CACHE_MARKER = ".complete"
 
 
 def main():
@@ -35,6 +39,17 @@ def main():
     (x_train, _), (x_test, _) = get_ROI_numpy(cfg, frame_size=args.frame_size)
     print(f"[build_roi_k_cache] delta_t={args.delta_t} roi_k={args.roi_k}: "
           f"{len(x_train)} train / {len(x_test)} test recordings kept")
+    if not len(x_train) or not len(x_test):
+        raise SystemExit("[build_roi_k_cache] empty split: ROI dataset missing or unreadable, cache NOT marked complete")
+
+    # Marker read by slurm/submit_roi_k.sh to skip this pair next time
+    # (same folder name as get_ROI_numpy's cache_dir).
+    tag = f"te{args.delta_t}k{args.roi_k}"
+    cache_dir = Path("cache") / f"DVS_ROI_{args.frame_size}_fwdPass_tr{tag}_te{tag}_{cfg.channels}"
+    if not cache_dir.is_dir():
+        raise SystemExit(f"[build_roi_k_cache] expected cache folder {cache_dir} not found")
+    (cache_dir / CACHE_MARKER).write_text(f"{len(x_train)} train / {len(x_test)} test\n")
+    print(f"[build_roi_k_cache] marked {cache_dir} complete")
 
 
 if __name__ == "__main__":

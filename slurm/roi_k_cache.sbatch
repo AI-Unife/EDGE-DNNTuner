@@ -15,7 +15,8 @@
 
 source "$SLURM_SUBMIT_DIR/slurm/env_leonardo.sh"
 
-LINE=$(sed -n "${SLURM_ARRAY_TASK_ID}p" params_roi_k_cache.txt)
+# submit_roi_k.sh passes only the pairs still to build (CACHE_PARAMS)
+LINE=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "${CACHE_PARAMS:-params_roi_k_cache.txt}")
 IFS=',' read -r DELTA_T ROI_K <<< "$LINE"
 echo "[$(date)] task ${SLURM_ARRAY_TASK_ID}: delta_t=${DELTA_T} roi_k=${ROI_K}"
 
