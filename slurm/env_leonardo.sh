@@ -1,6 +1,6 @@
 # Job environment on Leonardo (CINECA) — sourced by the *.sbatch scripts.
-# Paths come from slurm/leonardo_config.sh ($WORK/$USER/...); build the venv once
-# with slurm/setup_env_leonardo.sh on a login node.
+# Paths come from slurm/leonardo_config.sh ($WORK/$USER/tuner/...); run
+# slurm/setup_env_leonardo.sh once on a login node first.
 
 # shellcheck disable=SC1091
 source "$SLURM_SUBMIT_DIR/slurm/leonardo_config.sh"
@@ -10,7 +10,8 @@ if [[ ! -f "$VENV_DIR/bin/activate" ]]; then
     exit 1
 fi
 if [[ ! -d "$REPO_DIR/rois_and_coordinates/datasets" ]]; then
-    echo "ERROR: ROI dataset not found in $REPO_DIR/rois_and_coordinates/datasets" >&2
+    echo "ERROR: ROI dataset not reachable at $REPO_DIR/rois_and_coordinates/datasets" \
+         "(expected link to $ROI_DIR) — run 'bash slurm/setup_env_leonardo.sh links'" >&2
     exit 1
 fi
 module load "$PY_MODULE"
