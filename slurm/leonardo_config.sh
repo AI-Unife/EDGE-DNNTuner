@@ -16,7 +16,7 @@ BASE_DIR="${BASE_DIR:-${WORK:?WORK is not set (Leonardo project work area)}/${US
 # The same module must be loaded when the venv is used.
 PY_MODULE="${PY_MODULE:-python/3.11.7}"
 
-VENV_DIR="${VENV_DIR:-$BASE_DIR/venv}"
+VENV_DIR="${VENV_DIR:-$BASE_DIR/venv_tuner}"
 DATASETS_DIR="${DATASETS_DIR:-$BASE_DIR/datasets}"
 CACHE_DIR="${CACHE_DIR:-$BASE_DIR/cache}"
 RESULTS_DIR="${RESULTS_DIR:-$BASE_DIR/results}"
