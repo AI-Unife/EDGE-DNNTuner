@@ -14,7 +14,7 @@ BASE_DIR="${BASE_DIR:-${WORK:?WORK is not set (Leonardo project work area)}/${US
 
 # Python module the venv is built on (check with: module avail python).
 # The same module must be loaded when the venv is used.
-PY_MODULE="${PY_MODULE:-python/3.11.6--gcc--8.5.0}"
+PY_MODULE="${PY_MODULE:-python/3.11.7}"
 
 VENV_DIR="${VENV_DIR:-$BASE_DIR/venv}"
 DATASETS_DIR="${DATASETS_DIR:-$BASE_DIR/datasets}"
