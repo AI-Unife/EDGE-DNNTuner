@@ -63,7 +63,34 @@ def generate_params_file(output_path: str = "params.txt"):
     Path(output_path).write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"✅ File '{output_path}' generato con {len(lines)} combinazioni.")
 
+def generate_roi_k_params_file(output_path: str = "params_roi_k.txt",
+                               cache_output_path: str = "params_roi_k_cache.txt"):
+    """
+    Job array for the K-sub-window ROI variants (fixed delta_t framing only).
+
+    params_roi_k.txt       -> one line per job:  dataset,mode,delta_t,roi_k,seed
+    params_roi_k_cache.txt -> one line per (delta_t, roi_k): delta_t,roi_k
+                              (the ROI cache is shared by both variants and all
+                              seeds, so it is built once per pair before the array)
+    roi_k is 10, except at 5 ms where 10 sub-windows would be 0.5 ms (< 1 ms ROI
+    resolution): there roi_k = 5.
+    """
+    datasets = ["roigesture_conv1d", "roigesture_channels"]
+    seeds = [42, 7, 96]
+    dt_k = [(5000, 5), (10000, 10), (100000, 10), (200000, 10)]  # (delta_t us, roi_k)
+
+    lines = [f"{dataset},fwdPass,{dt},{k},{seed}"
+             for dataset, (dt, k), seed in product(datasets, dt_k, seeds)]
+    Path(output_path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    Path(cache_output_path).write_text("\n".join(f"{dt},{k}" for dt, k in dt_k) + "\n", encoding="utf-8")
+    print(f"✅ '{output_path}': {len(lines)} jobs; '{cache_output_path}': {len(dt_k)} cache builds.")
+
+
 def main():
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "roi_k":
+        generate_roi_k_params_file()
+        return
     job_configs = generate_jobs()
     # save_job_configs_to_file(job_configs, "params.txt")
     generate_params_file()
