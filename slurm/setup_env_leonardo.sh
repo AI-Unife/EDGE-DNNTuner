@@ -9,6 +9,7 @@
 #        <repo>/../rois_fs_32_16     -> datasets/rois_fs_32_16   (robustness_eval.py)
 #        <repo>/data                 -> datasets/data
 #        <repo>/cache                -> cache
+#        <repo>/logs                 -> logs   (also catches direct `sbatch slurm/*.sbatch`)
 #   4) Python venv in $WORK/$USER/tuner/venv (TensorFlow 2.15 with CUDA wheels)
 #
 #   bash slurm/setup_env_leonardo.sh          # everything
@@ -47,6 +48,7 @@ link "$ROI_DIR"   "$REPO_DIR/rois_and_coordinates"
 link "$ROI_DIR"   "$(dirname "$REPO_DIR")/rois_fs_32_16"
 link "$DATA_DIR"  "$REPO_DIR/data"
 link "$CACHE_DIR" "$REPO_DIR/cache"
+link "$LOGS_DIR"  "$REPO_DIR/logs"
 
 [[ "${1:-}" == "links" ]] && exit 0
 

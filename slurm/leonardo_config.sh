@@ -8,7 +8,7 @@
 #     datasets/data/                DVSGesture    (<repo>/data links here)
 #     cache/                        tonic caches  (<repo>/cache links here)
 #     results/                      one sub-folder per experiment
-#     logs/                         SLURM .out / .err
+#     logs/                         SLURM .out / .err (<repo>/logs links here)
 
 BASE_DIR="${BASE_DIR:-${WORK:?WORK is not set (Leonardo project work area)}/${USER}/tuner}"
 
