@@ -69,6 +69,14 @@ class search_space:
             else:
                 self.search_space.dimensions.append(Integer(-1, 0, name=dense_name))
 
+        if self.cfg.dataset == "roigesture_conv1d":
+            # Conv1D branch over the [K, 2] ROI sub-window coordinates
+            # (see TFModel._pos_conv1d_branch); kernel sizes limited to <= K.
+            kernels = [k for k in (3, 5) if k <= int(self.cfg.roi_k)] or [1]
+            self.search_space.dimensions.append(Integer(1, 4, name='unit_p1'))
+            self.search_space.dimensions.append(Integer(1, 3, name='n_conv_p'))
+            self.search_space.dimensions.append(Categorical(kernels, name='k_p'))
+
         return self.search_space
 
     # --------------------------------------------------------- add / remove --

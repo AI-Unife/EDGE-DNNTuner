@@ -245,6 +245,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--test_framing", type=str, default="delta_t",
                         choices=["frames", "delta_t"],
                         help="fwdPass TEST split: 'delta_t' (fixed --delta_t window) or 'frames' (fixed --frames)")
+    parser.add_argument("--roi_k", type=int, default=8,
+                        help="roigesture_conv1d / roigesture_channels: ROI sub-windows per delta_t frame "
+                             "(sub-window = delta_t // roi_k us, must be >= 1 ms; delta_t framing is forced)")
 
 
     args = parser.parse_args()
@@ -316,7 +319,7 @@ if __name__ == "__main__":
     elif dataset_name == "beans":
         dataset.load_beans()
     else:
-        print(f"Unknown dataset: {cfg.dataset}. Supported: cifar10, cifar100, mnist, beans, light, gesture, roigesture_matrix, roigesture_coords, cca, cim.")
+        print(f"Unknown dataset: {cfg.dataset}. Supported: cifar10, cifar100, mnist, beans, light, gesture, roigesture_matrix, roigesture_coords, roigesture_conv1d, roigesture_channels, cca, cim.")
         exit(1)
 
     # --- 3. Controller and Space Setup ---

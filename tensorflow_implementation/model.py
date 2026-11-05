@@ -9,6 +9,7 @@ from tensorflow.keras import layers, Model
 from tensorflow.keras import regularizers as reg
 from tensorflow.keras.layers import (
     Activation,
+    Conv1D,
     Conv2D,
     Dense,
     GlobalAveragePooling2D,
@@ -29,6 +30,7 @@ class TFModel(TunerModel):
 
     from_type_map = {
         LayerTypes.InputLayer: layers.InputLayer,
+        LayerTypes.Conv1D: layers.Conv1D,
         LayerTypes.Conv2D: layers.Conv2D,
         LayerTypes.MaxPooling2D: layers.MaxPooling2D,
         LayerTypes.GlobalAveragePooling2D: layers.GlobalAveragePooling2D,
@@ -129,13 +131,16 @@ class TFModel(TunerModel):
 
         x = GlobalAveragePooling2D()(x) if batch else Flatten()(x)
         
-        # If ROI dataset, concatenate flattened pos with x
+        # If ROI dataset, concatenate the position features with x
         pos_input = None
-        # Now concatenate pos input if ROI dataset
         if self.is_roi:
             pos_input = Input(shape=self.pos_input_shape, name="pos_input")
-            pos_flat = Flatten()(pos_input)
-            x = tf.keras.layers.Concatenate()([x, pos_flat])
+            if self.cfg.dataset == "roigesture_conv1d":
+                # pos is [K, 2]: (y, x) of each ROI sub-window -> Conv1D branch
+                pos_feat = self._pos_conv1d_branch(pos_input, params, reg_layer, batch)
+            else:
+                pos_feat = Flatten()(pos_input)
+            x = tf.keras.layers.Concatenate()([x, pos_feat])
         
         added_fcs = [k for k in params if re.match(r"fc_\d+$", k) and params[k] > 0]
         for layer_key in sorted(added_fcs, key=lambda s: int(s.split("_")[-1])):  # stable order
@@ -161,6 +166,22 @@ class TFModel(TunerModel):
         self.create_specs()
    
    
+    @staticmethod
+    def _pos_conv1d_branch(pos_input, params, reg_layer, batch):
+        """Conv1D branch over the ROI sub-window coordinates [K, 2].
+
+        Tuned by the search space: unit_p1 (filters = unit_p1 * num_neurons),
+        n_conv_p (number of Conv1D layers), k_p (kernel size). 'same' padding keeps
+        the length K; Flatten keeps the sub-window order for the FC head."""
+        filters = int(params.get("unit_p1", 1)) * int(params["num_neurons"])
+        kernel = int(params.get("k_p", 3))
+        p = pos_input
+        for _ in range(max(int(params.get("n_conv_p", 1)), 1)):
+            p = Conv1D(filters, kernel, padding="same", kernel_regularizer=reg_layer)(p)
+            p = Activation(params["activation"])(p)
+            p = BatchNormalization()(p) if batch else p
+        return Flatten()(p)
+
     def _add_residual(self, shortcut, x, output_channels, activation, reg_layer, stride=1):
         if shortcut.shape[-1] != output_channels or stride != 1:
             shortcut = Conv2D(output_channels, (1, 1), strides=stride, padding="same", kernel_regularizer=reg_layer)(shortcut)
@@ -192,7 +213,26 @@ class TFModel(TunerModel):
 
     def to_spec(self, layer: layers.Layer):
         layer_type = self.to_type(layer.__class__)
-        if layer_type == LayerTypes.Conv2D:
+        if layer_type == LayerTypes.Conv1D:
+            # input/output [B, L, C]: the length goes in HEIGHT, WIDTH is 1
+            return LayerSpec(
+                name=layer.name,
+                type=layer_type,
+                module=layer,
+                params={
+                    Params.IN_CHANNELS: layer.input.shape[2],
+                    Params.IN_HEIGHT: layer.input.shape[1],
+                    Params.IN_WIDTH: 1,
+                    Params.OUT_CHANNELS: layer.output.shape[2],
+                    Params.OUT_HEIGHT: layer.output.shape[1],
+                    Params.OUT_WIDTH: 1,
+                    Params.KERNEL_SIZE: layer.kernel_size,
+                    Params.STRIDE: layer.strides,
+                    Params.PADDING: layer.padding,
+                    Params.BIAS: layer.use_bias,
+                }
+            )
+        elif layer_type == LayerTypes.Conv2D:
             return LayerSpec(
                 name=layer.name,
                 type=layer_type,
@@ -293,7 +333,15 @@ class TFModel(TunerModel):
             raise Exception("Missing LayerSpec for layer of type " + layer.__class__.__name__)
 
     def from_spec(self, layer_spec: LayerSpec):
-        if layer_spec.type == LayerTypes.Conv2D:
+        if layer_spec.type == LayerTypes.Conv1D:
+            return layers.Conv1D(
+                name=layer_spec.name,
+                filters=layer_spec.get(Params.OUT_CHANNELS),
+                kernel_size=layer_spec.get(Params.KERNEL_SIZE),
+                padding="same" if layer_spec.get(Params.PADDING) == 1 else "valid",
+                use_bias=layer_spec.get(Params.BIAS)
+            )
+        elif layer_spec.type == LayerTypes.Conv2D:
             return layers.Conv2D(
                 name=layer_spec.name,
                 filters=layer_spec.get(Params.OUT_CHANNELS),

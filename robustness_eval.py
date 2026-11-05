@@ -244,14 +244,29 @@ def _center_of_mass_seq(pos: np.ndarray) -> np.ndarray:
     return np.stack([mean_y, mean_x], axis=1).astype(np.float32)
 
 
-def _roi_frames_at_dt(dataset_path, frame_size, dt_us, window_us, keep_idx, coords: bool = False):
-    """Yield ([T, fs, fs, 2], pos) float32 stacks for kept recordings.
+def _roi_frames_at_dt(dataset_path, frame_size, dt_us, window_us, keep_idx, coords: bool = False,
+                      roi_k_variant: str = None, roi_k: int = 1):
+    """Yield (data, pos) float32 stacks for kept recordings.
 
-    pos is [T, fs, fs, 1] for roigesture_matrix, or [T, 2] (center of mass,
-    ``coords=True``) for roigesture_coords."""
+    data is [T, fs, fs, 2]; pos is [T, fs, fs, 1] for roigesture_matrix, or
+    [T, 2] (center of mass, ``coords=True``) for roigesture_coords.
+    With ``roi_k_variant`` every dt frame is built from roi_k sub-windows of
+    dt // roi_k (as in components/gesture_dataset.build_roi_k_sample):
+      - roigesture_conv1d:   data [T, fs, fs, 2], pos [T, K, 2] coordinates;
+      - roigesture_channels: data [T, fs, fs, 2K] sub-window ROIs, pos [T, fs, fs, 1]
+        aggregated map (_infer_frames concatenates them into the 2K + 1 channels).
+    A dt that cannot be split into roi_k sub-windows of >= 1 ms yields nothing."""
     import tonic
     import tonic.transforms as T
-    from components.gesture_dataset import DVSGestureROI
+    from components.gesture_dataset import DVSGestureROI, build_roi_k_sample
+    from exp_config import ROI_MIN_SUB_WINDOW_US
+
+    k = int(roi_k) if roi_k_variant else 1
+    if roi_k_variant and (dt_us % k or dt_us // k < ROI_MIN_SUB_WINDOW_US):
+        print(f"  [skip] dt={dt_us} us cannot be split into roi_k={k} sub-windows of "
+              f">= {ROI_MIN_SUB_WINDOW_US} us")
+        return
+    frame_us = int(dt_us) // k
 
     ev_steps = [
         T.Denoise(filter_time=10000),
@@ -261,8 +276,8 @@ def _roi_frames_at_dt(dataset_path, frame_size, dt_us, window_us, keep_idx, coor
     if window_us is not None:
         ev_steps.append(CropRelative(window_us))
         pos_steps.append(CropRelative(window_us))
-    ev_steps.append(T.ToFrame(sensor_size=(frame_size, frame_size, 2), time_window=int(dt_us)))
-    pos_steps.append(T.ToFrame(sensor_size=(frame_size, frame_size, 1), time_window=int(dt_us)))
+    ev_steps.append(T.ToFrame(sensor_size=(frame_size, frame_size, 2), time_window=frame_us))
+    pos_steps.append(T.ToFrame(sensor_size=(frame_size, frame_size, 1), time_window=frame_us))
 
     ds = DVSGestureROI(
         dataset_path, output_size=(frame_size, frame_size, 2), train=False,
@@ -273,7 +288,16 @@ def _roi_frames_at_dt(dataset_path, frame_size, dt_us, window_us, keep_idx, coor
         data = np.transpose(np.asarray(x["data"]), (0, 2, 3, 1)).astype(np.float32)  # [T, fs, fs, 2]
         pos = np.transpose(np.asarray(x["pos"]), (0, 2, 3, 1)).astype(np.float32)    # [T, fs, fs, 1]
         n = min(len(data), len(pos))
+        n -= n % k                                       # whole dt frames only
         data, pos = data[:n], pos[:n]
+        if roi_k_variant == "roigesture_conv1d":
+            built = build_roi_k_sample(data, pos, k, roi_k_variant)
+            yield built["data"].astype(np.float32), built["pos"]
+            continue
+        if roi_k_variant == "roigesture_channels":
+            built = build_roi_k_sample(data, pos, k, roi_k_variant).astype(np.float32)
+            yield built[..., :-1], built[..., -1:]
+            continue
         if coords:
             pos = _center_of_mass_seq(pos)  # [T, 2]
         yield data, pos
@@ -932,9 +956,13 @@ def _run_experiment(experiment: Path, kind: str, is_roi: bool, args, windows):
         # roigesture_coords -> pos collapsed to its [T, 2] center of mass;
         # roigesture_matrix (or anything else) -> pos kept as a [T, fs, fs, 1] map.
         coords = "coords" in str(getattr(cfg, "dataset", "")).lower()
+        from exp_config import ROI_K_DATASETS
+        roi_k_variant = cfg.dataset if cfg.dataset in ROI_K_DATASETS else None
+        roi_k = int(cfg.roi_k) if roi_k_variant else 1
         print(f"[{label}] ROI variant: {'coords (center of mass)' if coords else 'matrix (position map)'}")
     else:
         dataset_path, frame_size, coords = "./data", None, False
+        roi_k_variant, roi_k = None, 1
 
     summ, per_sample = [], []
     for window_us in windows:
@@ -952,7 +980,8 @@ def _run_experiment(experiment: Path, kind: str, is_roi: bool, args, windows):
             approx = "variable" if window_us is None else f"~{window_us // dt_us}"
             print(f"[{label}] window={wtag}  inter-frame {dt_ms} ms ({approx} frames/sample)...")
             if is_roi:
-                it = _roi_frames_at_dt(dataset_path, frame_size, dt_us, window_us, keep, coords=coords)
+                it = _roi_frames_at_dt(dataset_path, frame_size, dt_us, window_us, keep, coords=coords,
+                                       roi_k_variant=roi_k_variant, roi_k=roi_k)
             else:
                 it = _plain_frames_at_dt(dataset_path, dt_us, window_us, keep)
             rows = _eval_at_dt(model, it, labels, is_roi, dt_ms, n_classes=n_classes)
@@ -1052,8 +1081,12 @@ def _run_time_profile(experiment: Path, kind: str, is_roi: bool, args, windows,
                 return [], [], [], []
             frame_size = _roi_frame_size(experiment)
             coords = "coords" in str(getattr(cfg, "dataset", "")).lower()
+            from exp_config import ROI_K_DATASETS
+            roi_k_variant = cfg.dataset if cfg.dataset in ROI_K_DATASETS else None
+            roi_k = int(cfg.roi_k) if roi_k_variant else 1
         else:
             dataset_path, frame_size, coords = "./data", None, False
+            roi_k_variant, roi_k = None, 1
 
         if is_roi:
             keep, labels = _keep_indices_roi(dataset_path, frame_size, None)
@@ -1067,7 +1100,8 @@ def _run_time_profile(experiment: Path, kind: str, is_roi: bool, args, windows,
         print(f"[{label}] time-profile (uncropped, own duration) dt={dt_ms:g}ms "
               f"over {len(keep)} recordings — running inference...")
         if is_roi:
-            it = _roi_frames_at_dt(dataset_path, frame_size, dt_us, None, keep, coords=coords)
+            it = _roi_frames_at_dt(dataset_path, frame_size, dt_us, None, keep, coords=coords,
+                                   roi_k_variant=roi_k_variant, roi_k=roi_k)
         else:
             it = _plain_frames_at_dt(dataset_path, dt_us, None, keep)
         sequences = _predict_sequences(model, it, labels, is_roi)
@@ -1149,6 +1183,10 @@ def _roi_kind_label(experiment: Path) -> str:
         with open(experiment / "config.yaml") as f:
             raw = yaml.safe_load(f) or {}
         name = str(raw.get("dataset", "")).lower()
+        if "conv1d" in name:
+            return "ROI-conv1d"
+        if "channels" in name:
+            return "ROI-channels"
         if "coords" in name:
             return "ROI-coords"
         if "matrix" in name:

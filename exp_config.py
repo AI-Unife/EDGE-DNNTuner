@@ -47,13 +47,19 @@ class ConfigSchema:
     mode: str = "fwdPass"                        # Experiment mode (fwdPass, depth, hybrid)
     channels: int = 2                            # Number of channels for the dataset
     polarity: str = "both"                       # Polarity for event-based datasets (both, sum, sub, drop)
+    roi_k: int = 8                               # roigesture_conv1d / roigesture_channels: number of ROI sub-windows
+                                                  # per delta_t frame (each sub-window lasts delta_t // roi_k us, >= 1 ms)
 
 # ---------------- Validation (same rules as the parser) ----------------
 _VALID_MODULES = {"hardware_module", "flops_module"}
 from components.optimizers import STRATEGIES
 _VALID_OPT = set(STRATEGIES)
 _VALID_BACKENDS = {"tf", "torch"}
-_VALID_DATASETS = {"light", "beans", "cifar10", "cifar100", "mnist", "tinyimagenet", "gesture", "roigesture_coords", "roigesture_matrix", "roigesture_3D", "cca", "cim"}
+_VALID_DATASETS = {"light", "beans", "cifar10", "cifar100", "mnist", "tinyimagenet", "gesture", "roigesture_coords", "roigesture_matrix", "roigesture_3D",
+                   "roigesture_conv1d", "roigesture_channels", "cca", "cim"}
+# ROI datasets that split every delta_t frame into roi_k sub-windows (fixed delta_t framing only)
+ROI_K_DATASETS = {"roigesture_conv1d", "roigesture_channels"}
+ROI_MIN_SUB_WINDOW_US = 1000                     # ROI positions have a 1 ms minimum resolution
 
 def create_config_file(exp_dir: str | Path, overrides: Optional[Dict[str, Any]] = None) -> Path:
     """
@@ -92,6 +98,7 @@ def create_config_file(exp_dir: str | Path, overrides: Optional[Dict[str, Any]] 
         "mode": schema.mode,
         "channels": schema.channels,
         "polarity": schema.polarity,
+        "roi_k": schema.roi_k,
     }
     if overrides:
         base.update(overrides)
@@ -160,6 +167,21 @@ def _validate(d: Dict[str, Any]) -> None:
         print(f"WARNING: Invalid polarity '{polarity}'. Choose from: {sorted(valid_polarities)}. Set to 'both'")
         d['polarity'] = 'both'
 
+    # roi_k datasets: fixed delta_t framing only, sub-window = delta_t // roi_k >= 1 ms
+    if d.get("dataset") in ROI_K_DATASETS:
+        if d.get("mode", "fwdPass") != "fwdPass":
+            raise ValueError(f"{d['dataset']} supports only mode 'fwdPass', got '{d.get('mode')}'")
+        for key in ("train_framing", "test_framing"):
+            if d.get(key) != "delta_t":
+                if d.get(key) is not None:
+                    print(f"WARNING: {d['dataset']} supports only fixed delta_t framing; {key} '{d.get(key)}' set to 'delta_t'")
+                d[key] = "delta_t"
+        k = int(d.get("roi_k", ConfigSchema.roi_k))
+        dt = int(d.get("delta_t", ConfigSchema.delta_t))
+        if k < 1 or dt % k or dt // k < ROI_MIN_SUB_WINDOW_US:
+            raise ValueError(f"{d['dataset']}: delta_t={dt} us must be a multiple of roi_k={k} with "
+                             f"delta_t // roi_k >= {ROI_MIN_SUB_WINDOW_US} us")
+
 # ---------------- Loader + discovery ----------------
 _ENV_KEY = "EXP_CONFIG"   # set this to point to the run's config file
 _lock = threading.Lock()
@@ -210,6 +232,7 @@ def _apply_defaults(d: Dict[str, Any]) -> Dict[str, Any]:
         "mode": d.get("mode", schema.mode),
         "channels": d.get("channels", schema.channels),
         "polarity": d.get("polarity", schema.polarity),
+        "roi_k": d.get("roi_k", schema.roi_k),
     }
     return merged
 

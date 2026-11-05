@@ -12,7 +12,7 @@ from tonic.dataset import Dataset
 from tonic.datasets import DVSGesture 
 from sklearn.model_selection import train_test_split  # kept for compatibility if needed elsewhere
 
-from exp_config import load_cfg
+from exp_config import load_cfg, ROI_K_DATASETS, ROI_MIN_SUB_WINDOW_US
 
 
 # fwdPass + delta_t framing: every recording is cut to its first MAX_DURATION_US
@@ -27,6 +27,84 @@ def n_window_frames(delta_t: int) -> int:
     if n < 1:
         raise ValueError(f"delta_t={delta_t} us is longer than the {MAX_DURATION_US} us window")
     return n
+
+
+def roi_sub_window(cfg) -> int:
+    """Sub-window length (us) of the roi_k datasets: delta_t // roi_k, >= 1 ms."""
+    k, dt = int(cfg.roi_k), int(cfg.delta_t)
+    if k < 1 or dt % k or dt // k < ROI_MIN_SUB_WINDOW_US:
+        raise ValueError(f"delta_t={dt} us must be a multiple of roi_k={k} with "
+                         f"delta_t // roi_k >= {ROI_MIN_SUB_WINDOW_US} us")
+    return dt // k
+
+
+class CropRelative:
+    """Keep only the events in the first ``window_us`` microseconds of a recording
+    (relative to its own first timestamp)."""
+
+    def __init__(self, window_us: int):
+        self.window_us = int(window_us)
+
+    def __call__(self, events):
+        t = events["t"]
+        if len(t) == 0:
+            return events
+        return events[t - t[0] <= self.window_us]
+
+
+def roi_k_coords(pos: np.ndarray) -> np.ndarray:
+    """[T, K, H, W, 1] ROI position maps -> [T, K, 2] (y, x) center of mass per
+    sub-window, normalized to [0, 1] by (size - 1).
+
+    A sub-window with no ROI event keeps the last valid position (sub-windows
+    before the first ROI event take the first valid one; a recording with no
+    ROI event at all gets the frame center, 0.5)."""
+    T, K, H, W = pos.shape[:4]
+    A = pos.reshape(T * K, H, W, -1).sum(axis=-1).astype(np.float64)
+    yy, xx = np.indices((H, W))
+    tot = A.sum(axis=(1, 2))
+    valid = tot > 0
+    safe = np.where(valid, tot, 1.0)
+    c = np.stack([(A * yy).sum(axis=(1, 2)) / safe / max(H - 1, 1),
+                  (A * xx).sum(axis=(1, 2)) / safe / max(W - 1, 1)], axis=1)
+    if not valid.any():
+        c[:] = 0.5
+    else:
+        idx = np.where(valid, np.arange(T * K), 0)
+        np.maximum.accumulate(idx, out=idx)          # last valid index <= i
+        first = int(np.argmax(valid))
+        idx[:first] = first
+        c = c[idx]
+    return c.reshape(T, K, 2).astype(np.float32)
+
+
+def build_roi_k_sample(x_sub: np.ndarray, pos_sub: np.ndarray, k: int, variant: str):
+    """Group T*K sub-window frames into T frames of K sub-windows.
+
+    Args:
+        x_sub:   [T*K, H, W, 2] ROI event frames (one per sub-window).
+        pos_sub: [T*K, H, W, 1] ROI position maps (one per sub-window).
+        k:       sub-windows per frame.
+        variant: "roigesture_conv1d" -> {"data": [T, H, W, 2] ROI aggregated over the
+                 frame, "pos": [T, K, 2] per sub-window coordinates};
+                 "roigesture_channels" -> [T, H, W, 2K + 1]: the K sub-window ROIs
+                 (2 polarities each, sub-window-major: k0p0, k0p1, k1p0, ...) plus
+                 the position map aggregated over the frame as last channel.
+    """
+    n, H, W, C = x_sub.shape
+    if n % k or pos_sub.shape[0] != n:
+        raise ValueError(f"{variant}: {n} event / {pos_sub.shape[0]} position sub-frames "
+                         f"are not T*K with K={k}")
+    T = n // k
+    x = x_sub.reshape(T, k, H, W, C)
+    p = pos_sub.reshape(T, k, *pos_sub.shape[1:])
+    if variant == "roigesture_conv1d":
+        return {"data": x.sum(axis=1), "pos": roi_k_coords(p)}
+    if variant == "roigesture_channels":
+        subs = x.transpose(0, 2, 3, 1, 4).reshape(T, H, W, k * C)
+        agg = p.sum(axis=1).astype(subs.dtype)
+        return np.concatenate([subs, agg], axis=-1)
+    raise ValueError(f"Unknown roi_k variant '{variant}'")
 
 
 # ------------------------------- Targets -------------------------------------
@@ -298,6 +376,11 @@ def dataset_to_numpy(dataset, cfg, delta_t_framing: bool = True) -> Tuple[np.nda
 
     crop = cfg.mode == "fwdPass" and delta_t_framing
     n_keep = n_window_frames(cfg.delta_t) if crop else None
+    # roi_k datasets are framed at delta_t // roi_k: each kept frame is K sub-frames
+    roi_k = int(cfg.roi_k) if cfg.dataset in ROI_K_DATASETS else 1
+    if roi_k > 1 and not crop:
+        raise ValueError(f"{cfg.dataset} supports only fwdPass with delta_t framing")
+    n_cut = n_keep * roi_k if crop else None
 
     n_total = len(dataset)
     n_skipped = 0
@@ -318,12 +401,16 @@ def dataset_to_numpy(dataset, cfg, delta_t_framing: bool = True) -> Tuple[np.nda
             if crop:
                 # data and ROI-map are framed by two independent ToFrame passes:
                 # both must cover the window, then both are cut to it.
-                if x_reshaped.shape[0] < n_keep or (pos is not None and pos.shape[0] < n_keep):
+                if x_reshaped.shape[0] < n_cut or (pos is not None and pos.shape[0] < n_cut):
                     n_short += 1
                     continue
-                x_reshaped = x_reshaped[:n_keep]
-                pos = pos[:n_keep] if pos is not None else None
-            if cfg.dataset == "roigesture_coords":
+                x_reshaped = x_reshaped[:n_cut]
+                pos = pos[:n_cut] if pos is not None else None
+            if cfg.dataset in ROI_K_DATASETS:
+                if pos is None:
+                    raise ValueError(f"{cfg.dataset}: missing ROI position map")
+                x_list.append(build_roi_k_sample(x_reshaped, pos, roi_k, cfg.dataset))
+            elif cfg.dataset == "roigesture_coords":
                 pos_mean = None
                 if pos is not None:
                     # Compute center of mass for ROI position map
@@ -394,7 +481,7 @@ def dataset_to_numpy(dataset, cfg, delta_t_framing: bool = True) -> Tuple[np.nda
                                      f"does not match the event frames {x_reshaped.shape}")
                 x_list.append(np.concatenate([x_reshaped, pos.astype(x_reshaped.dtype)], axis=-1))
             else:
-                print(f"ERROR: Unrecognized ROI dataset type '{cfg.dataset}'; expected 'roigesture_coords', 'roigesture_matrix'.")
+                print(f"ERROR: Unrecognized ROI dataset type '{cfg.dataset}'; expected one of 'roigesture_coords', 'roigesture_matrix', {sorted(ROI_K_DATASETS)}.")
                 exit(-1)
         else:
             # Non-ROI: plain arrays
@@ -549,6 +636,13 @@ def get_ROI_numpy(cfg, frame_size: int = 32, test_only: bool = False) -> Tuple[T
     test_dt = (cfg.mode == "fwdPass") and (test_framing == "delta_t")
     train_tag = f"te{cfg.delta_t}" if train_dt else f"fr{cfg.frames}"
     test_tag = f"te{cfg.delta_t}" if test_dt else f"fr{cfg.frames}"
+    roi_k_mode = cfg.dataset in ROI_K_DATASETS
+    if roi_k_mode:
+        if not (train_dt and test_dt):
+            raise ValueError(f"{cfg.dataset} supports only fwdPass with delta_t framing on both splits")
+        sub_us = roi_sub_window(cfg)
+        # cached frames are the delta_t // roi_k sub-windows of the first 1.5 s
+        train_tag = test_tag = f"te{cfg.delta_t}k{cfg.roi_k}"
     cache_dir = f"./cache/DVS_ROI_{frame_size}_{cfg.mode}_tr{train_tag}_te{test_tag}_{cfg.channels}/"
     output_size = (frame_size, frame_size, 2)
     _ensure_cache_dir(cache_dir)
@@ -563,7 +657,20 @@ def get_ROI_numpy(cfg, frame_size: int = 32, test_only: bool = False) -> Tuple[T
             # Downsample and ToFrame expect 2D spatial sizes (H, W) only, not including polarity
             transforms.Downsample(sensor_size=(32, 32), target_size=(frame_size, frame_size)),
         ]
-        if cfg.mode == "fwdPass":
+        if roi_k_mode:
+            # Frame at delta_t // roi_k; crop each stream to the first 1.5 s (+ one
+            # sub-window of margin so ToFrame never drops the last kept sub-window),
+            # dataset_to_numpy then cuts to n_window_frames(delta_t) * roi_k.
+            crop = CropRelative(MAX_DURATION_US + sub_us)
+            tfms.append(crop)
+            tfms.append(transforms.ToFrame(sensor_size=(frame_size, frame_size, 2), time_window=sub_us))
+            pos_tf = transforms.Compose([
+                transforms.Downsample(sensor_size=(128, 128, 1), target_size=(frame_size, frame_size)),
+                crop,
+                transforms.ToFrame(sensor_size=(frame_size, frame_size, 1), time_window=sub_us),
+            ])
+            target_transform = None
+        elif cfg.mode == "fwdPass":
             if split_dt:
                 tfms.append(transforms.ToFrame(sensor_size=(frame_size, frame_size, 2), time_window=cfg.delta_t))
                 pos_tf = ROIMapTransform(time_window=cfg.delta_t, output_size=(frame_size, frame_size, 1))
