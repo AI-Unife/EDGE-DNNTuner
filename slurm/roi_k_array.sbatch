@@ -18,7 +18,7 @@ source "$SLURM_SUBMIT_DIR/slurm/env_leonardo.sh"
 
 OPT="filtered"
 NPARAMS_TH=300000
-EPOCHS=${EPOCHS:-2}        # symbolic_tuner.py default; override with: EPOCHS=... sbatch ...
+EPOCHS=${EPOCHS:-100}      # as the roigesture_matrix runs; override with: EPOCHS=... bash slurm/submit_roi_k.sh
 EVAL=${EVAL:-300}          # symbolic_tuner.py default
 
 # RESULTS_DIR = $WORK/$USER/tuner/results (slurm/leonardo_config.sh)
