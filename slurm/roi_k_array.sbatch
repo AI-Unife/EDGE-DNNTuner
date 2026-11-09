@@ -27,6 +27,16 @@ IFS=',' read -r DATASET MODE DELTA_T ROI_K SEED <<< "$LINE"
 NAME="${RESULTS_DIR}/${DATASET}_${MODE}_dt${DELTA_T}_k${ROI_K}_300K_${OPT}_s${SEED}"
 echo "[$(date)] task ${SLURM_ARRAY_TASK_ID}: ${NAME}"
 
+# analyze_results.py reads hyperparameters / parameter counts from a *.out file
+# INSIDE the experiment folder: link this job's SLURM log there as tuner.out.
+mkdir -p "$NAME"
+JOB_OUT="$LOGS_DIR/roi_k_tuner_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}.out"
+if [[ -f "$JOB_OUT" ]]; then
+    ln -sfn "$JOB_OUT" "$NAME/tuner.out"
+else
+    echo "WARNING: $JOB_OUT not found, $NAME/tuner.out not linked" >&2
+fi
+
 python symbolic_tuner.py \
     --dataset "$DATASET" --mode "$MODE" \
     --delta_t "$DELTA_T" --roi_k "$ROI_K" \

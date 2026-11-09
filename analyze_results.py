@@ -7,7 +7,7 @@ and the tuning pipeline, creating:
 2. A total CSV with the best result for each experiment
 
 Usage:
-    python analyze_results.py [parent_dir] [output_dir] [--hw-weight W]
+    python analyze_results.py [parent_dir] [output_dir] [--hw-weight W] [--max-params N]
 
 Without arguments the user is asked to select the parent folder containing
 the experiments. --hw-weight sets hardware_module's weight_cost used to (re)compute
@@ -16,6 +16,10 @@ missing — including for experiments whose mod_list never included
 hardware_module in the first place (default: 0.3). See also experiment_stats.py,
 which groups these summary rows by dataset/opt/module and computes mean/std
 across seeds, plus an accuracy-vs-HW-cost scatter plot.
+--max-params N picks, for every experiment, the best iteration among those with
+at most N parameters (summary saved as summary_best_results_maxparams<N>.csv).
+Per-iteration parameter counts come from flops_report.txt when flops_module was
+active, otherwise from the 'Total params: N' model summaries in the .out file.
 """
 
 import os
@@ -126,6 +130,17 @@ class ResultsAnalyzer:
         if hw_data:
             self.has_hardware_module = True
 
+        # Without flops_module: per-iteration parameter counts from the .out
+        # model summaries (same iteration indexing as the hyperparameters).
+        out_nparams: Dict[int, int] = {}
+        if not flops_data:
+            try:
+                out_nparams = self._extract_total_params_per_iteration(self._get_out_file())
+            except Exception as e:
+                print(f"  Parameter counts not available from .out file: {e}")
+            if out_nparams:
+                print(f"  nparams read from .out model summaries ({len(out_nparams)} iterations)")
+
         # Load per-iteration timing data (see components/controller.py's log_timing)
         timing_map = self._load_timing_data()
 
@@ -143,7 +158,8 @@ class ResultsAnalyzer:
                 iteration=i + 1,
                 accuracy=accuracies[i] if i < len(accuracies) else None,
                 flops=flops_data[i][1] if flops_data and i < len(flops_data) else None,
-                nparams=flops_data[i][0] if flops_data and i < len(flops_data) else None,
+                nparams=(flops_data[i][0] if flops_data and i < len(flops_data)
+                         else out_nparams.get(i)),
                 latency=hw_data[i][0] if hw_data and i < len(hw_data) else None,
                 hw_cost=hw_data[i][1] if hw_data and i < len(hw_data) else None,
                 hw_total_cost=hw_data[i][2] if hw_data and i < len(hw_data) else None,
@@ -482,6 +498,27 @@ class ResultsAnalyzer:
         m = re.search(r"TOTAL TIME\s*-+>\s*([\d.]+)\s*seconds", text)
         return float(m.group(1)) if m else None
 
+    def _extract_total_params_per_iteration(self, input_file) -> Dict[int, int]:
+        """{iteration: parameter count}, from TF's model.summary() 'Total params: N'
+        line, keyed by the 'ITERATION N' line preceding it in the .out file (same
+        indexing as _extract_hyperparams_per_iteration; keeps the LAST match)."""
+        iteration_pattern = re.compile(r'ITERATION (\d+)')
+        params_pattern = re.compile(r'Total params:\s*([\d,]+)')
+        results: Dict[int, int] = {}
+        current_iter = None
+        with open(input_file, 'r', encoding='utf-8', errors='replace') as f:
+            for line in f:
+                iter_match = iteration_pattern.search(line)
+                if iter_match:
+                    current_iter = int(iter_match.group(1))
+                    continue
+                if current_iter is None:
+                    continue
+                pm = params_pattern.search(line)
+                if pm:
+                    results[current_iter] = int(pm.group(1).replace(",", ""))
+        return results
+
     def _extract_total_params_kb_per_iteration(self, input_file) -> Dict[int, float]:
         """{iteration: model size in KB}, from TF's model.summary() 'Total
         params: N (X UNIT)' line (see tensorflow_implementation/neural_network.py's
@@ -542,10 +579,18 @@ class ResultsAnalyzer:
             print(f"  Error reading config.yaml: {e}")
             self.config = {}
 
-    def get_best_result(self) -> Optional[ExperimentResult]:
-        """Return the best result (highest accuracy)"""
+    def get_best_result(self, max_params: Optional[float] = None) -> Optional[ExperimentResult]:
+        """Return the best result (lowest score).
+
+        max_params: if given, only iterations with a known nparams <= max_params
+        are eligible (None when no iteration satisfies it)."""
         # valid_results = [r for r in self.results if r.accuracy is not None and r.hyperparams['activation'] in ['relu', 'selu'] and r.nparams is not None and r.nparams <= 300000]
         valid_results = [r for r in self.results if r.accuracy is not None]
+        if max_params is not None:
+            n_known = sum(r.nparams is not None for r in valid_results)
+            valid_results = [r for r in valid_results if r.nparams is not None and r.nparams <= max_params]
+            print(f"  {len(valid_results)} iterations with nparams <= {max_params:g} "
+                  f"(nparams known for {n_known})")
         # print(f"  Found {len(valid_results)} valid results with accuracy and hyperparams")
         # print(f"  Valid results: {[r for r in valid_results]}")
         if not valid_results:
@@ -962,7 +1007,8 @@ def _load_dataset_for(dataset_name: str) -> TunerDataset:
 
 
 def analyze_experiment(exp_dir: Path, exp_csv: Optional[Path] = None,
-                        hw_weight: Optional[float] = None) -> Optional[Dict[str, Any]]:
+                        hw_weight: Optional[float] = None,
+                        max_params: Optional[float] = None) -> Optional[Dict[str, Any]]:
     """
     Analyze a single experiment directory: load its logs, save its per-iteration
     CSV, and return the summary row for its best iteration (or None if no valid
@@ -976,6 +1022,8 @@ def analyze_experiment(exp_dir: Path, exp_csv: Optional[Path] = None,
             includes experiments whose mod_list never included hardware_module
             (lets a caller ask "what would the HW cost have been at weight W").
             Default 0.3, matching hardware_module's own historical default.
+        max_params: if given, the best iteration is chosen only among those
+            with nparams <= max_params (see ResultsAnalyzer.get_best_result).
     """
     hw_weight = 0.3 if hw_weight is None else hw_weight
     print(f"📈 Analyzing: {exp_dir.name}")
@@ -989,9 +1037,9 @@ def analyze_experiment(exp_dir: Path, exp_csv: Optional[Path] = None,
     if analyzer.save_experiment_csv(exp_csv):
         print(f"  CSV saved: {exp_csv.name}")
 
-    best_result = analyzer.get_best_result()
+    best_result = analyzer.get_best_result(max_params=max_params)
     if not best_result:
-        print(f"  No valid results found\n")
+        print(f"  No valid results found" + (f" with nparams <= {max_params:g}" if max_params is not None else "") + "\n")
         return None
 
     dataset = None
@@ -1033,6 +1081,8 @@ def analyze_experiment(exp_dir: Path, exp_csv: Optional[Path] = None,
         'best_hw_config': best_result.hw_config,
         'hw_weight_used': hw_weight,
     }
+    if max_params is not None:
+        summary_row['max_params'] = max_params
     summary_row.update(analyzer.get_timing_summary())
 
     # Add data from config.yaml
@@ -1052,14 +1102,15 @@ def analyze_experiment(exp_dir: Path, exp_csv: Optional[Path] = None,
 
 
 def analyze_all_experiments(parent_dir: Path, output_dir: Optional[Path] = None,
-                             hw_weight: Optional[float] = None):
+                             hw_weight: Optional[float] = None,
+                             max_params: Optional[float] = None):
     """
     Analyze all experiments in the parent folder.
 
     Args:
         parent_dir: Parent folder containing the experiments
         output_dir: Output folder (default: parent_dir)
-        hw_weight: see analyze_experiment.
+        hw_weight, max_params: see analyze_experiment.
     """
     if output_dir is None:
         output_dir = parent_dir
@@ -1083,13 +1134,15 @@ def analyze_all_experiments(parent_dir: Path, output_dir: Optional[Path] = None,
 
     for exp_dir in sorted(experiments):
         exp_csv = (output_dir if output_dir != parent_dir else exp_dir) / f"{exp_dir.name}_results.csv"
-        summary_row = analyze_experiment(exp_dir, exp_csv=exp_csv, hw_weight=hw_weight)
+        summary_row = analyze_experiment(exp_dir, exp_csv=exp_csv, hw_weight=hw_weight,
+                                         max_params=max_params)
         if summary_row is not None:
             summary_data.append(summary_row)
 
     # Save total CSV
     if summary_data:
-        summary_csv = output_dir / "summary_best_results.csv"
+        summary_csv = output_dir / ("summary_best_results.csv" if max_params is None
+                                    else f"summary_best_results_maxparams{int(max_params)}.csv")
         try:
             with open(summary_csv, 'w', newline='') as f:
                 base_columns = [
@@ -1130,6 +1183,11 @@ def main():
     if "--hw-weight" in argv:
         idx = argv.index("--hw-weight")
         hw_weight = float(argv[idx + 1])
+        del argv[idx:idx + 2]
+    max_params = None
+    if "--max-params" in argv:
+        idx = argv.index("--max-params")
+        max_params = float(argv[idx + 1])
         del argv[idx:idx + 2]
 
     # Check if arguments have been passed
@@ -1184,7 +1242,7 @@ def main():
             output_dir = None
     
     # Analyze experiments
-    analyze_all_experiments(parent_dir, output_dir, hw_weight=hw_weight)
+    analyze_all_experiments(parent_dir, output_dir, hw_weight=hw_weight, max_params=max_params)
     
     print("\n" + "="*70)
     print("  Analysis completed!")
