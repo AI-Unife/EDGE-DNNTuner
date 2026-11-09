@@ -44,4 +44,5 @@ python symbolic_tuner.py \
     --opt "$OPT" --seed "$SEED" \
     --nparams_th "$NPARAMS_TH" \
     --epochs "$EPOCHS" --eval "$EVAL" \
-    --name "$NAME"
+    --name "$NAME" \
+    --mod_list flops_module
