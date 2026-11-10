@@ -24,7 +24,9 @@ EVAL=${EVAL:-300}          # symbolic_tuner.py default
 # RESULTS_DIR = $WORK/$USER/tuner/results (slurm/leonardo_config.sh)
 LINE=$(sed -n "${SLURM_ARRAY_TASK_ID}p" params_roi_k.txt)
 IFS=',' read -r DATASET MODE DELTA_T ROI_K SEED <<< "$LINE"
-NAME="${RESULTS_DIR}/${DATASET}_${MODE}_dt${DELTA_T}_k${ROI_K}_300K_${OPT}_s${SEED}"
+# date + array job id prefix (as the old launchers): every submission gets its
+# own folders, a re-run never appends to an older run's logs.
+NAME="${RESULTS_DIR}/$(date +%y_%m_%d_%H)_${SLURM_ARRAY_JOB_ID}_${DATASET}_${MODE}_dt${DELTA_T}_k${ROI_K}_300K_${OPT}_s${SEED}"
 echo "[$(date)] task ${SLURM_ARRAY_TASK_ID}: ${NAME}"
 
 # analyze_results.py reads hyperparameters / parameter counts from a *.out file

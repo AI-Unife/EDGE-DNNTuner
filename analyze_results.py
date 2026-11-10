@@ -459,7 +459,9 @@ class ResultsAnalyzer:
         """{module_name: seconds} from a timing_report.csv row's module_time_<name> columns."""
         module_times = {}
         for key, value in timing_row.items():
-            if key.startswith("module_time_") and value not in (None, ""):
+            # key is None for the extra values of a row longer than the header
+            # (timing_report.csv appended by a later run with more modules)
+            if isinstance(key, str) and key.startswith("module_time_") and value not in (None, ""):
                 module_times[key[len("module_time_"):]] = self._safe_float(value)
         return module_times or None
 
