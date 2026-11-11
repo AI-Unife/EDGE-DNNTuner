@@ -4,7 +4,8 @@ the date/job-id prefix): the first without modules, the second with
 
 For every folder under RESULTS_DIR it looks for the SLURM logs of the runs that
 wrote it ($LOGS_DIR/roi_k_tuner_<job>_<task>.out, first line "task N: <NAME>"),
-counts the iterations each one logged ("ACCURACY:" / "Chosen point:" lines)
+takes the cut from the logs themselves (params_report.txt lines = iterations of
+the no-module run, see plan(); works for runs killed by the 24 h limit too)
 and splits the files at that point into two new folders
     <date>_<jobid>_<name>        (date = .out modification time)
 one per run. Split exactly (they are what analyze_results.py reads):
@@ -79,20 +80,34 @@ def write_csv(path: Path, header, rows):
 
 
 def plan(exp: Path, runs):
-    """Checks; returns (old, new) run tuples or raises ValueError with the reason."""
+    """Checks; returns (old, new, n1, hp1) or raises ValueError with the reason.
+
+    The cut comes from the logs themselves, not from the .out counts (a run
+    killed by the 24 h limit before PYTHONUNBUFFERED loses the tail of its .out):
+    controller.log() writes one params_report line per iteration (discarded nets
+    too) in the no-module run, flops_module one flops_report line in the other,
+    right after acc/score. n1 = params_report lines = run-1 lines of acc/score.
+    hyper-neural is written before training, so a run killed mid-training has
+    one extra line: hp1 = lines left after removing run 2's (flops_report lines,
+    +1 if run 2's .out ends with a "Chosen point" without its ACCURACY)."""
     if len(runs) != 2:
         raise ValueError(f"{len(runs)} SLURM runs with iterations found (need 2)")
     old, new = runs
     logs = exp / "algorithm_logs"
-    n_acc = len(lines(logs / "acc_report.txt"))
-    if n_acc != old[2] + new[2]:
-        raise ValueError(f"acc_report has {n_acc} lines, .out files say {old[2]}+{new[2]} "
-                         "(second run still going?)")
-    n_par, n_flo = len(lines(logs / "params_report.txt")), len(lines(logs / "flops_report.txt"))
-    if n_par != old[2] or n_flo != new[2]:
-        raise ValueError(f"params_report {n_par} / flops_report {n_flo} lines, expected {old[2]} / {new[2]}: "
-                         "first run is not the no-module one?")
-    return old, new
+    n1, n2 = len(lines(logs / "params_report.txt")), len(lines(logs / "flops_report.txt"))
+    if not n1 or not n2:
+        raise ValueError(f"params_report {n1} / flops_report {n2} lines: not a no-module + flops pair")
+    for fname in ("acc_report.txt", "score_report.txt"):
+        n = len(lines(logs / fname))
+        if n != n1 + n2:
+            raise ValueError(f"{fname} has {n} lines, params_report+flops_report = {n1}+{n2} "
+                             "(second run still going, or killed between the two writes?)")
+    n_hp = len(lines(logs / "hyper-neural.txt"))
+    hp1 = n_hp - (n2 + max(0, min(1, new[3] - new[2])))
+    if n_hp and hp1 not in (n1, n1 + 1):
+        raise ValueError(f"hyper-neural has {n_hp} lines, cannot place the cut "
+                         f"(run 1: {n1} iterations, run 2: {n2})")
+    return old, new, n1, hp1
 
 
 def new_name(exp: Path, run):
@@ -100,7 +115,7 @@ def new_name(exp: Path, run):
     return exp.parent / f"{stamp}_{run[0]}_{exp.name}"
 
 
-def split(exp: Path, old, new, backup_dir: Path):
+def split(exp: Path, old, new, n1, hp1, backup_dir: Path):
     logs = exp / "algorithm_logs"
     cfg = yaml.safe_load((exp / "config.yaml").read_text())
     new_mods = cfg.get("mod_list") or []
@@ -114,7 +129,7 @@ def split(exp: Path, old, new, backup_dir: Path):
         ls = lines(logs / fname)
         if not ls:
             continue
-        k = old[2] if marker == "ACCURACY:" else old[3]
+        k = n1 if marker == "ACCURACY:" else hp1
         (dst["old"] / "algorithm_logs" / fname).write_text("".join(ls[:k]))
         (dst["new"] / "algorithm_logs" / fname).write_text("".join(ls[k:]))
     if (logs / "params_report.txt").exists():
@@ -163,15 +178,15 @@ def main():
     done = skipped = 0
     for exp in sorted(p for p in args.results.iterdir() if (p / "algorithm_logs").is_dir()):
         try:
-            old, new = plan(exp, runs.get(exp.name, []))
+            old, new, n1, hp1 = plan(exp, runs.get(exp.name, []))
         except ValueError as e:
             print(f"SKIP {exp.name}: {e}")
             skipped += 1
             continue
-        print(f"{exp.name}\n  run 1: job {old[0]}, {old[2]} iterations -> {new_name(exp, old).name}"
-              f"\n  run 2: job {new[0]}, {new[2]} iterations -> {new_name(exp, new).name}")
+        print(f"{exp.name}\n  run 1: job {old[0]}, {n1} iterations -> {new_name(exp, old).name}"
+              f"\n  run 2: job {new[0]}, {len(lines(exp / 'algorithm_logs' / 'flops_report.txt'))} iterations -> {new_name(exp, new).name}")
         if args.apply:
-            split(exp, old, new, backup_dir)
+            split(exp, old, new, n1, hp1, backup_dir)
         done += 1
     print(f"\n{done} folders {'split' if args.apply else 'to split (dry run, use --apply)'}, {skipped} skipped")
 
