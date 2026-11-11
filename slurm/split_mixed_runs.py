@@ -87,9 +87,12 @@ def plan(exp: Path, runs):
     controller.log() writes one params_report line per iteration (discarded nets
     too) in the no-module run, flops_module one flops_report line in the other,
     right after acc/score. n1 = params_report lines = run-1 lines of acc/score.
-    hyper-neural is written before training, so a run killed mid-training has
-    one extra line: hp1 = lines left after removing run 2's (flops_report lines,
-    +1 if run 2's .out ends with a "Chosen point" without its ACCURACY)."""
+    hyper-neural is written before training, so it has extra lines for iterations
+    that never reached log() (killed by the time limit, failed training): it is
+    cut by content instead. objFunction prints the same str(dict) to the .out
+    ("Chosen point: {...}") that it appends to hyper-neural, so the run-2 .out
+    (complete: PYTHONUNBUFFERED) must be exactly the tail of hyper-neural:
+    hp1 = the lines before it."""
     if len(runs) != 2:
         raise ValueError(f"{len(runs)} SLURM runs with iterations found (need 2)")
     old, new = runs
@@ -102,11 +105,13 @@ def plan(exp: Path, runs):
         if n != n1 + n2:
             raise ValueError(f"{fname} has {n} lines, params_report+flops_report = {n1}+{n2} "
                              "(second run still going, or killed between the two writes?)")
-    n_hp = len(lines(logs / "hyper-neural.txt"))
-    hp1 = n_hp - (n2 + max(0, min(1, new[3] - new[2])))
-    if n_hp and hp1 not in (n1, n1 + 1):
-        raise ValueError(f"hyper-neural has {n_hp} lines, cannot place the cut "
-                         f"(run 1: {n1} iterations, run 2: {n2})")
+    hp = [l.rstrip("\n") for l in lines(logs / "hyper-neural.txt")]
+    chosen2 = [l.split("Chosen point:", 1)[1].strip()
+               for l in new[1].read_text(errors="replace").splitlines() if "Chosen point:" in l]
+    hp1 = len(hp) - len(chosen2)
+    if hp and (hp1 < n1 or hp[hp1:] != chosen2):
+        raise ValueError(f"hyper-neural ({len(hp)} lines) does not end with the {len(chosen2)} "
+                         f"'Chosen point' lines of {new[1].name}: cannot place the cut")
     return old, new, n1, hp1
 
 
