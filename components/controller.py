@@ -269,13 +269,15 @@ class controller:
             self.modules.state(self.model, self.nn.flops, self.nn.nparams)
             
             # # --- SCORING LOGIC ---
-            # ### TODO: Refactor this section for correct score return ###
-            # if self.exp_cfg.quantization:
-            #     quantizer = quantizer_module(opt=params["optimizer"])
-            #     _ = quantizer.quantizer_function(self.model) 
-            #     q_loss, q_acc = quantizer.evaluate_quantized_model(self.dataset.X_test, self.dataset.Y_test)
-            #     self.score = -float(q_acc) 
-            #     quantizer.log_function()
+            # ### TODO: quantizer section
+            # sqnr = ...
+            # if sqnr > 0.0:
+            #     import quantizer.quantizer_POTQ as quantizer_module
+            # elif sqnr < 0.0:
+            #     import quantizer.quantizer_POTQ as quantizer_module
+            # quantizer = quantizer_module.quantizer_module(opt=params["optimizer"])
+            # _ = quantizer.quantizer_function(self.model)
+            # q_loss, q_acc = quantizer.evaluate_quantized_model(self.dataset.X_test, self.dataset.Y_test)  
             
             if "flops_module" in self.exp_cfg.mod_list:
                 _, _, opt_value = self.modules.optimiziation()
