@@ -316,11 +316,11 @@ class NeuralSymbolicBridge:
                     res[prob]["dec_conv_block"] = 0
                     print("Reached min conv blocks")
 
-                if controller.layer_x_block > controller.max_layer_x_block and "inc_conv_layers" in res[prob]:
+                if controller.layer_x_block >= controller.max_layer_x_block and "inc_conv_layers" in res[prob]:
                     res[prob]["inc_conv_layers"] = 0
                     print("Reached max layers per block")
 
-                if controller.layer_x_block <= 2 and "dec_conv_layers" in res[prob]:
+                if controller.layer_x_block <= controller.min_layer_x_block and "dec_conv_layers" in res[prob]:
                     res[prob]["dec_conv_layers"] = 0
                     print("Reached min layers per block")
 

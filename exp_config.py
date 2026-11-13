@@ -37,6 +37,9 @@ class ConfigSchema:
     nparams_th: int = 2500000                    # Max number of PARAMS
     params_cut: bool = False                     # Without flops_module: skip (penalty score) networks with
                                                   # more than nparams_th params, no symbolic rules added
+    layerwise_lr: bool = False                   # TF: wrap the optimizer in LayerWiseLR (Conv2D gradients scaled by 1/sqrt(2) per layer)
+    seed_net: bool = False                       # Start from the small reference network (1 conv per block, no BatchNorm,
+                                                  # MaxPool + Flatten + Dense 64): first evaluated point and network template
     opt: str = "filtered"                        # Optimizer type (standard | filtered | basic | RS | RS_ruled)
     # Gesture-specific parameters
     frames: int = 16                             # fwdPass: max sequence length (pad/truncate target); hybrid/depth: number of frames
@@ -93,6 +96,8 @@ def create_config_file(exp_dir: str | Path, overrides: Optional[Dict[str, Any]] 
         "flops_th": schema.flops_th,
         "nparams_th": schema.nparams_th,
         "params_cut": schema.params_cut,
+        "layerwise_lr": schema.layerwise_lr,
+        "seed_net": schema.seed_net,
         "opt": schema.opt,
         "frames": schema.frames,
         "delta_t": schema.delta_t,
@@ -228,6 +233,8 @@ def _apply_defaults(d: Dict[str, Any]) -> Dict[str, Any]:
         "flops_th": d.get("flops_th", schema.flops_th),
         "nparams_th": d.get("nparams_th", schema.nparams_th),
         "params_cut": d.get("params_cut", schema.params_cut),
+        "layerwise_lr": d.get("layerwise_lr", schema.layerwise_lr),
+        "seed_net": d.get("seed_net", schema.seed_net),
         "opt": d.get("opt", schema.opt),
         "frames": d.get("frames", schema.frames),
         "delta_t": d.get("delta_t", schema.delta_t),

@@ -154,9 +154,24 @@ class NeuralNetwork(BaseNeuralNetwork):
                 self.dataset.Y_train = tf.keras.utils.to_categorical(self.dataset.Y_train, self.dataset.n_classes)
             if self.dataset.Y_test.ndim == 1:
                 self.dataset.Y_test = tf.keras.utils.to_categorical(self.dataset.Y_test, self.dataset.n_classes)
+            if self.dataset.Y_val is not None and self.dataset.Y_val.ndim == 1:
+                self.dataset.Y_val = tf.keras.utils.to_categorical(self.dataset.Y_val, self.dataset.n_classes)
         if self.dataset.X_train.ndim == 3:
             self.dataset.X_train = self.dataset.X_train[..., None]
             self.dataset.X_test = self.dataset.X_test[..., None]
+            if self.dataset.X_val is not None:
+                self.dataset.X_val = self.dataset.X_val[..., None]
+        # With a validation split (gesture, by user) EarlyStopping and the returned
+        # score use it; the test accuracy is only evaluated and kept in test_score.
+        self.has_val = self.dataset.X_val is not None
+        self.test_score = None
+
+    def _inputs(self, split: str):
+        """(X, Y) of a split ("train" | "val" | "test"); X is [data, pos] for ROI."""
+        X = getattr(self.dataset, f"X_{split}")
+        if self.is_roi:
+            X = [X, getattr(self.dataset, f"pos_{split}")]
+        return X, getattr(self.dataset, f"Y_{split}")
 
 
 
@@ -270,7 +285,9 @@ class NeuralNetwork(BaseNeuralNetwork):
         # --- Optimizer (safe construction, then wrap with LayerWiseLR) ---
         base_opt = _optimizer_from_name(params["optimizer"], float(params["learning_rate"]))
 
-        # Build per-layer multipliers (decay by sqrt(2) across Conv2D feature hierarchy)
+        # Build per-layer multipliers (decay by sqrt(2) across Conv2D feature hierarchy).
+        # Only with --layerwise_lr; note that adaptive optimizers (Adam, Adamax,
+        # Adagrad, Adadelta) are almost invariant to this gradient scaling.
         multiplier: Dict[str, float] = {}
         trainable_names = [
             (getattr(var, "path", None) or var.name).split("/")[0]
@@ -285,7 +302,10 @@ class NeuralNetwork(BaseNeuralNetwork):
                 multiplier[layer_name] = current_mul
                 current_mul /= lr_factor
 
-        opt = LayerWiseLR(base_opt, multiplier, learning_rate=float(params["learning_rate"]))
+        if self.exp_cfg.get("layerwise_lr", False):
+            opt = LayerWiseLR(base_opt, multiplier, learning_rate=float(params["learning_rate"]))
+        else:
+            opt = base_opt
         self.model.optimizer = opt
 
         # --- Callbacks ---
@@ -294,12 +314,10 @@ class NeuralNetwork(BaseNeuralNetwork):
         # --- Compile ---
         self.model.model.compile(loss="categorical_crossentropy", optimizer=opt, metrics=["accuracy"])
         
-        if self.is_roi:
-            X_train = [self.dataset.X_train, self.dataset.pos_train]
-            X_test = [self.dataset.X_test, self.dataset.pos_test]
-        else:
-            X_train = self.dataset.X_train
-            X_test = self.dataset.X_test
+        # Validation data: the user-held-out split if present, else the test set (old behaviour)
+        eval_split = "val" if self.has_val else "test"
+        X_train, Y_train = self._inputs("train")
+        X_eval, Y_eval = self._inputs(eval_split)
 
         # --- Train ---
         # Check if "debug" is in the experiment name
@@ -332,28 +350,32 @@ class NeuralNetwork(BaseNeuralNetwork):
             final_loss = float(np.random.uniform(0.5, 2.0))
             final_acc = float(np.random.uniform(0.4, 0.95))
             score = [final_loss, final_acc]
+            self.test_score = score
             
         else: 
             if (self.exp_cfg.mode in ("fwdPass", "hybrid")) and "gesture" in self.exp_cfg.dataset :
             
                 history = train_model(
                     self.model.model, opt,
-                    X_train, self.dataset.Y_train,
-                    X_test, self.dataset.Y_test,
+                    X_train, Y_train,
+                    X_eval, Y_eval,
                     self.epochs, params,
                     [es]
                 )
             else:
                 history = self.model.model.fit(
-                    X_train, self.dataset.Y_train,
+                    X_train, Y_train,
                     epochs=self.epochs,
                     batch_size=int(params["batch_size"]),
                     verbose=2,
-                    validation_data=(X_test, self.dataset.Y_test),
+                    validation_data=(X_eval, Y_eval),
                     callbacks=[es],
                 ).history
-            # --- Evaluate ---
-            score = self.eval_model()
+            # --- Evaluate --- (score on the validation split when present)
+            score = self.eval_model(eval_split)
+            self.test_score = self.eval_model("test") if self.has_val else score
+            if self.has_val:
+                print(f"[eval] val accuracy {score[1]:.4f} - test accuracy {self.test_score[1]:.4f}")
 
         try:
             dash_model_path = f"{self.exp_cfg.name}/dashboard/model/model.keras"
@@ -370,15 +392,12 @@ class NeuralNetwork(BaseNeuralNetwork):
 
         return score, history, self.model
     
-    def eval_model(self):
-        if self.is_roi:
-            X_test = [self.dataset.X_test, self.dataset.pos_test]
-        else:
-            X_test = self.dataset.X_test
+    def eval_model(self, split: str = "test"):
+        X_test, Y_test = self._inputs(split)
         if (self.exp_cfg.mode in ("fwdPass", "hybrid")) and "gesture" in self.exp_cfg.dataset:
-            score = eval_model(self.model.model, X_test, self.dataset.Y_test)
+            score = eval_model(self.model.model, X_test, Y_test)
         else:        
-            score = self.model.model.evaluate(X_test, self.dataset.Y_test, verbose=2)
+            score = self.model.model.evaluate(X_test, Y_test, verbose=2)
         return score
     
     def save_model(self, name="best-model.keras"):

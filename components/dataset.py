@@ -52,6 +52,10 @@ class TunerDataset:
     Y_train: np.ndarray
     Y_test: np.ndarray
     n_classes: int
+    # Optional validation split (gesture datasets, split by user); None = no validation set
+    X_val = None
+    Y_val = None
+    pos_val = None
     
     @staticmethod
     def _as_float32(arr):
@@ -67,6 +71,8 @@ class TunerDataset:
     def data_as_float32(self):
         self.X_train = self._as_float32(self.X_train)
         self.X_test  = self._as_float32(self.X_test)
+        if self.X_val is not None:
+            self.X_val = self._as_float32(self.X_val)
 
     def normalize_data(self):
         self.X_train = self.X_train.astype(np.float32) / 255.0
@@ -284,39 +290,62 @@ class TunerDataset:
         print(f"\tX_test:{len(x_test)}")
         print(f"\tY_test:{len(y_test)}")
 
-    def load_gesture(self, test_only: bool = False):
+    def load_gesture(self, test_only: bool = False, val_split: bool = False):
         """Load DVSGesture dataset using the specialized gesture_dataset module.
 
         In fwdPass mode X_train/X_test are dense [N, T, H, W, 2] arrays (with
         delta_t framing every recording is cut to the same number of frames).
         ``test_only=True`` loads only the test split (train left empty).
+        ``val_split=True`` holds out some train users as validation (X_val, Y_val).
         """
         from components.gesture_dataset import gesture_data
 
         self.n_classes = 11
-        X_train_raw, self.Y_train, X_test_raw, self.Y_test = gesture_data(
-            num_classes=11, ROI=False, test_only=test_only
-        )
+        if val_split:
+            X_train_raw, self.Y_train, X_val_raw, self.Y_val, X_test_raw, self.Y_test = gesture_data(
+                num_classes=11, ROI=False, test_only=test_only, val_split=True
+            )
+            self.X_val = _stack_or_object(list(X_val_raw)) if len(X_val_raw) else None
+        else:
+            X_train_raw, self.Y_train, X_test_raw, self.Y_test = gesture_data(
+                num_classes=11, ROI=False, test_only=test_only
+            )
         self.X_train = _stack_or_object(list(X_train_raw)) if len(X_train_raw) else np.array([])
         self.X_test = _stack_or_object(list(X_test_raw))
 
         print(len(self.X_train), 'train samples')
+        if self.X_val is not None:
+            print(len(self.X_val), 'validation samples')
         print(len(self.X_test), 'test samples')
 
-    def load_roi_gesture(self, frame_size: int = 32, test_only: bool = False):
+    def load_roi_gesture(self, frame_size: int = 32, test_only: bool = False, val_split: bool = False):
         """Load DVSGesture dataset using the specialized gesture_dataset module, with ROI.
 
         X and pos stack into dense arrays (with delta_t framing every recording
         is cut to the same number of frames). For roigesture_matrix the position
         map is already an extra channel of X, so pos_train/pos_test are not set.
         ``test_only=True`` loads only the test split (train left empty).
+        ``val_split=True`` holds out some train users as validation (X_val, pos_val, Y_val).
         """
         from components.gesture_dataset import gesture_data
 
         self.n_classes = 11
-        X_train_raw, self.Y_train, X_test_raw, self.Y_test = gesture_data(
-            num_classes=11, ROI=True, frame_size=frame_size, test_only=test_only
-        )
+        X_val_raw = []
+        if val_split:
+            X_train_raw, self.Y_train, X_val_raw, self.Y_val, X_test_raw, self.Y_test = gesture_data(
+                num_classes=11, ROI=True, frame_size=frame_size, test_only=test_only, val_split=True
+            )
+        else:
+            X_train_raw, self.Y_train, X_test_raw, self.Y_test = gesture_data(
+                num_classes=11, ROI=True, frame_size=frame_size, test_only=test_only
+            )
+        if len(X_val_raw):
+            if isinstance(X_val_raw[0], dict):
+                self.X_val = _stack_or_object([item["data"] for item in X_val_raw])
+                self.pos_val = _stack_or_object([item["pos"] for item in X_val_raw])
+            else:
+                self.X_val = _stack_or_object(list(X_val_raw))
+            print(len(self.X_val), 'X validation samples')
         if len(X_test_raw) and isinstance(X_test_raw[0], dict):
             self.X_test = _stack_or_object([item["data"] for item in X_test_raw])
             self.pos_test = _stack_or_object([item["pos"] for item in X_test_raw])

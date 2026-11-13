@@ -47,7 +47,11 @@ class controller:
         self.start_conv = 2
         self.max_conv = self.count_max_conv(base_blocks=self.start_conv)
         self.count_no_probs = 0
-        self.layer_x_block = 2
+        # seed_net: the small reference network has one conv per block, and
+        # layer_x_block is a search-space dimension whose upper bound is
+        # self.layer_x_block (moved by the inc/dec_conv_layers rules)
+        self.min_layer_x_block = 1 if self.exp_cfg.get("seed_net", False) else 2
+        self.layer_x_block = self.min_layer_x_block
         self.max_layer_x_block = 6
 
         # Search space + tuning rules
@@ -247,7 +251,13 @@ class controller:
         
 
         
-        self.nn.build_network(params, self.layer_x_block)
+        # conv layers per block: from the sampled point when it is a search-space
+        # dimension (seed_net, 0 and 1 both mean one), else the rule-driven value
+        if "layer_x_block" in params:
+            layer_x_block = max(1, int(params["layer_x_block"]))
+        else:
+            layer_x_block = self.layer_x_block
+        self.nn.build_network(params, layer_x_block)
         
         # 3. Check Constraints 
         if "flops_module" in self.exp_cfg.mod_list:
@@ -470,7 +480,18 @@ class controller:
             print(f"\nACCURACY: {0.0}\n")
             f.write("None \n")
         f.close()
-        
+
+        # With a validation split acc_report holds the validation accuracy (the tuner
+        # score); the test accuracy of the same network goes to test_acc_report.
+        if getattr(self.nn, "has_val", False):
+            test_score = getattr(self.nn, "test_score", None)
+            with open(f"{self.exp_cfg.name}/algorithm_logs/test_acc_report.txt", "a") as f:
+                if self.scoreNN is not None and test_score is not None:
+                    print(f"\nTEST ACCURACY: {test_score[1]}\n")
+                    f.write(str(test_score[1]) + "\n")
+                else:
+                    f.write("None \n")
+
         f = open(f"{self.exp_cfg.name}/algorithm_logs/score_report.txt", "a")
         if self.score is not None:
             print(f"\nSCORE: {self.score}\n")

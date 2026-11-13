@@ -20,6 +20,11 @@ from exp_config import load_cfg, ROI_K_DATASETS, ROI_MIN_SUB_WINDOW_US
 # the same length (every DVSGesture recording lasts at least ~1.75 s).
 MAX_DURATION_US = 1_500_000
 
+# Train users held out as validation set (users 1..23 are train, 24..29 test in
+# DVSGesture): the same user is never in train, validation and test. Fixed list,
+# drawn once with sorted(np.random.default_rng(0).choice(np.arange(1, 24), 4, replace=False)).
+VAL_USERS = (7, 12, 14, 18)
+
 
 def n_window_frames(delta_t: int) -> int:
     """Number of delta_t frames kept per recording (MAX_DURATION_US // delta_t)."""
@@ -366,7 +371,7 @@ def reshape_x_pos(arr: np.ndarray, pos: Optional[np.ndarray], cfg) -> Tuple[np.n
         # print(f"Reshaping for depth mode: output shape {arr.shape}, pos shape {pos.shape if pos is not None else None}")
         return arr, pos
 
-def dataset_to_numpy(dataset, cfg, delta_t_framing: bool = True) -> Tuple[np.ndarray, np.ndarray]:
+def dataset_to_numpy(dataset, cfg, delta_t_framing: bool = True, return_index: bool = False):
     """
     Convert a (cached) tonic dataset into NumPy arrays (or object array for ROI) with the layout expected by the model.
 
@@ -385,8 +390,9 @@ def dataset_to_numpy(dataset, cfg, delta_t_framing: bool = True) -> Tuple[np.nda
       - False (fixed number of frames): every recording has T == cfg.frames
         and y is the time-repeated one-hot [T, C] produced by the target_transform.
     For hybrid/depth ``delta_t_framing`` is ignored (labels handled as before).
+    ``return_index=True`` also returns the indices (in ``dataset``) of the kept samples.
     """
-    x_list, y_list = [], []
+    x_list, y_list, kept = [], [], []
 
     crop = cfg.mode == "fwdPass" and delta_t_framing
     n_keep = n_window_frames(cfg.delta_t) if crop else None
@@ -519,6 +525,7 @@ def dataset_to_numpy(dataset, cfg, delta_t_framing: bool = True) -> Tuple[np.nda
             # fixed frames -> time-repeated one-hot from the target_transform,
             # or hybrid/depth label as produced upstream.
             y_list.append(np.array(y))
+        kept.append(i)
 
     if n_skipped:
         print(f"[dataset_to_numpy] {n_skipped}/{n_total} samples skipped (unreadable); "
@@ -528,7 +535,18 @@ def dataset_to_numpy(dataset, cfg, delta_t_framing: bool = True) -> Tuple[np.nda
               f"{n_keep} frames of {cfg.delta_t} us); {len(x_list)} kept.")
 
     # Return X as object array so that elements can be dicts (ROI) or arrays; y as numeric array
+    if return_index:
+        return np.array(x_list, dtype=object), np.array(y_list), np.asarray(kept, dtype=np.int64)
     return np.array(x_list, dtype=object), np.array(y_list)
+
+
+def _split_val_users(x, y, kept, users, val_users):
+    """Split the converted train arrays by user: samples whose user is in val_users
+    -> validation. kept are the dataset indices of x/y, users the per-index user ids."""
+    is_val = np.isin(np.asarray(users)[kept], np.asarray(val_users))
+    print(f"[val split] users {sorted(val_users)}: {int(is_val.sum())} validation, "
+          f"{int((~is_val).sum())} train recordings")
+    return (x[~is_val], y[~is_val]), (x[is_val], y[is_val])
 
 
 # ---------------------------- Dataset loaders --------------------------------
@@ -565,16 +583,19 @@ def _ensure_cache_dir(cache_dir: str) -> None:
 _EMPTY = (np.array([], dtype=object), np.array([]))
 
 
-def get_datasets_numpy(cfg, test_only: bool = False):
+def get_datasets_numpy(cfg, test_only: bool = False, val_users=None):
     """
     Load DVSGesture through Tonic, apply transforms, and return NumPy arrays.
 
     Args:
         test_only: if True, only the test split is built/converted; the train
                    split is returned empty (saves time when just evaluating).
+        val_users: if given, the recordings of these train users become a
+                   validation split.
 
     Returns:
-        ((x_train, y_train), (x_test, y_test))
+        ((x_train, y_train), (x_test, y_test)), or with val_users
+        ((x_train, y_train), (x_val, y_val), (x_test, y_test))
     """
     dataset_path = './data/'
     # Each split is framed per its own cfg.*_framing ("frames" -> fixed cfg.frames;
@@ -624,27 +645,33 @@ def get_datasets_numpy(cfg, test_only: bool = False):
     x_test, y_test = dataset_to_numpy(cached_test, cfg, delta_t_framing=test_dt)
 
     if test_only:
-        return _EMPTY, (x_test, y_test)
+        return (_EMPTY, _EMPTY, (x_test, y_test)) if val_users is not None else (_EMPTY, (x_test, y_test))
 
     train_tf, train_target_tf = _split_pipeline(split_dt=train_dt)
     train = tonic.datasets.DVSGesture(
         save_to=dataset_path, transform=train_tf, target_transform=train_target_tf, train=True
     )
     cached_train = tonic.DiskCachedDataset(train, cache_path=os.path.join(cache_dir, "train"))
-    x_train, y_train = dataset_to_numpy(cached_train, cfg, delta_t_framing=train_dt)
+    x_train, y_train, kept = dataset_to_numpy(cached_train, cfg, delta_t_framing=train_dt, return_index=True)
 
+    if val_users is not None:
+        tr, va = _split_val_users(x_train, y_train, kept, train.users, val_users)
+        return tr, va, (x_test, y_test)
     return (x_train, y_train), (x_test, y_test)
 
 
-def get_ROI_numpy(cfg, frame_size: int = 32, test_only: bool = False) -> Tuple[Tuple[np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray]]:
+def get_ROI_numpy(cfg, frame_size: int = 32, test_only: bool = False, val_users=None):
     """
     Load a folder-structured ROI dataset via ROIDataset and return NumPy arrays.
 
     Args:
         test_only: if True, only the test split is built/converted.
+        val_users: if given, the recordings of these train users become a
+                   validation split.
 
     Returns:
-        ((x_train, y_train), (x_test, y_test))
+        ((x_train, y_train), (x_test, y_test)), or with val_users
+        ((x_train, y_train), (x_val, y_val), (x_test, y_test))
     """
     dataset_path = "rois_and_coordinates/datasets/"
     # Each split is framed per its own cfg.*_framing (see get_datasets_numpy).
@@ -721,7 +748,7 @@ def get_ROI_numpy(cfg, frame_size: int = 32, test_only: bool = False) -> Tuple[T
     x_test, y_test = dataset_to_numpy(cached_test, cfg, delta_t_framing=test_dt)
 
     if test_only:
-        return _EMPTY, (x_test, y_test)
+        return (_EMPTY, _EMPTY, (x_test, y_test)) if val_users is not None else (_EMPTY, (x_test, y_test))
 
     train_tf, train_target_tf, train_pos_tf = _split_pipeline(split_dt=train_dt)
     train = DVSGestureROI(
@@ -734,8 +761,11 @@ def get_ROI_numpy(cfg, frame_size: int = 32, test_only: bool = False) -> Tuple[T
     )
     print("Loaded ROI training dataset with", len(train), "samples.")
     cached_train = tonic.DiskCachedDataset(train, cache_path=os.path.join(cache_dir, "train"))
-    x_train, y_train = dataset_to_numpy(cached_train, cfg, delta_t_framing=train_dt)
+    x_train, y_train, kept = dataset_to_numpy(cached_train, cfg, delta_t_framing=train_dt, return_index=True)
 
+    if val_users is not None:
+        tr, va = _split_val_users(x_train, y_train, kept, train.users, val_users)
+        return tr, va, (x_test, y_test)
     return (x_train, y_train), (x_test, y_test)
 
 
@@ -746,7 +776,8 @@ def ROI_data():
     return gesture_data(ROI=True)
 
 
-def gesture_data(num_classes: int = 11, ROI: bool = False, frame_size: int = 32, test_only: bool = False):
+def gesture_data(num_classes: int = 11, ROI: bool = False, frame_size: int = 32, test_only: bool = False,
+                 val_split: bool = False):
     """
     End-to-end loader producing NumPy arrays ready for model consumption.
 
@@ -763,20 +794,29 @@ def gesture_data(num_classes: int = 11, ROI: bool = False, frame_size: int = 32,
           X: [B, H, W, C]
           y: integer labels (will be one-hot here)
 
+    ``val_split=True`` holds out the train users in VAL_USERS as a validation split.
+
     Returns:
-        x_train, x_test, y_train, y_test
+        x_train, y_train, x_test, y_test, or with val_split
+        x_train, y_train, x_val, y_val, x_test, y_test
     """
     cfg = load_cfg()
-    if ROI:
-        (x_train, y_train), (x_test, y_test) = get_ROI_numpy(cfg=cfg, frame_size=frame_size, test_only=test_only)
+    loader = get_ROI_numpy if ROI else get_datasets_numpy
+    kw = {"frame_size": frame_size} if ROI else {}
+    if val_split:
+        (x_train, y_train), (x_val, y_val), (x_test, y_test) = loader(
+            cfg=cfg, test_only=test_only, val_users=VAL_USERS, **kw)
     else:
-        (x_train, y_train), (x_test, y_test) = get_datasets_numpy(cfg=cfg, test_only=test_only)
+        (x_train, y_train), (x_test, y_test) = loader(cfg=cfg, test_only=test_only, **kw)
 
     # Convert labels to one-hot for single-frame modes
     if cfg.mode == "depth":
         if len(y_train):
             y_train = tf.keras.utils.to_categorical(y_train, num_classes)
+        if val_split and len(y_val):
+            y_val = tf.keras.utils.to_categorical(y_val, num_classes)
         y_test = tf.keras.utils.to_categorical(y_test, num_classes)
 
-
+    if val_split:
+        return x_train, y_train, x_val, y_val, x_test, y_test
     return x_train, y_train, x_test, y_test

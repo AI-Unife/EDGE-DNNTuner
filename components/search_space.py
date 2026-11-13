@@ -56,6 +56,16 @@ class search_space:
             for d in range(1,4):
                 dense_name = f"fc_{d}"
                 self.search_space.dimensions.append(Integer(0, 32, name=dense_name))
+        elif self.cfg.get("seed_net", False):
+            # the seed network has one Dense layer (fc_1 * num_neurons units). Without
+            # GAP the Dense sits on the Flatten (hundreds/thousands of features): range
+            # kept small (<= 8 * 64 = 512 units) so most points stay under the params limit
+            self.search_space.dimensions.append(Integer(0, 8, name="fc_1"))
+        if self.cfg.get("seed_net", False):
+            # Conv layers per block, chosen by the optimizer. 0 and 1 both mean one
+            # conv per block (skopt needs low < high, as for the (-1, 0) "off"
+            # dimensions); the inc/dec_conv_layers rules move the upper bound.
+            self.search_space.dimensions.append(Integer(0, 1, name="layer_x_block"))
         for b in range(1, max_block + 1):
             conv_name = f'new_conv_{b}'
             if full_space:
@@ -78,6 +88,40 @@ class search_space:
             self.search_space.dimensions.append(Categorical(kernels, name='k_p'))
 
         return self.search_space
+
+    # ------------------------------------------------------------ seed net --
+
+    # Small reference network (gesture_challenge prova.py with one more pooling):
+    # Conv 16 - pool - Conv 32 - pool - pool - Flatten - Dense 64 - softmax (38.6K
+    # params), Adam lr 1e-3, ReLU. With the seed_net template (one conv per block, no
+    # BatchNorm, pool + Flatten head) these values reproduce it; dr_f is the minimum
+    # of its range (no dropout in the reference network).
+    SEED_NET = {
+        "num_neurons": 16, "unit_c1": 1, "unit_c2": 2, "fc_1": 4, "layer_x_block": 1,
+        "learning_rate": 1e-3, "batch_size": 16, "optimizer": "Adam", "activation": "relu",
+        "data_augmentation": False, "reg_l2": False, "skip_connection": False,
+        "unit_p1": 1, "n_conv_p": 1,
+    }
+
+    @staticmethod
+    def seed_point(space: Space) -> list:
+        """SEED_NET as a point of `space` (in its dimension order). Dimensions not in
+        SEED_NET take their 'off' value: 0 for integers when allowed (no extra
+        layers), else the lower bound / first category."""
+        point = []
+        for dim in space.dimensions:
+            if dim.name in search_space.SEED_NET:
+                value = search_space.SEED_NET[dim.name]
+            elif isinstance(dim, Categorical):
+                value = dim.categories[0]
+            elif isinstance(dim, Integer) and dim.low <= 0 <= dim.high:
+                value = 0
+            else:
+                value = dim.low
+            if value not in dim:
+                raise ValueError(f"seed_net: {dim.name}={value} is outside the search space {dim}")
+            point.append(value)
+        return point
 
     # --------------------------------------------------------- add / remove --
 

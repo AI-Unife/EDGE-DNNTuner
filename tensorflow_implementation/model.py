@@ -64,7 +64,8 @@ class TFModel(TunerModel):
         self.da = params.get("data_augmentation", False)
 
         print(f"\n\n{self.cfg.dataset.lower()}\n\n")
-        batch = True #if "tiny" in self.cfg.dataset.lower() or "cima" in self.cfg.dataset.lower() else False  # self.reg if self.reg else None
+        # seed_net template (small reference network): no BatchNorm -> Flatten instead of GAP
+        batch = not self.cfg.get("seed_net", False) #if "tiny" in self.cfg.dataset.lower() or "cima" in self.cfg.dataset.lower() else False  # self.reg if self.reg else None
         self.model = None
         # 2) Build a new CNN
 
@@ -83,7 +84,9 @@ class TFModel(TunerModel):
             x = Conv2D(params["unit_c1"] * params['num_neurons'], (3, 3), padding="same" )(x)
             x = Activation(params["activation"])(x)
             x = BatchNormalization()(x) if batch else x
-        if self.residual:
+        if layer_x_block < 2:
+            pass  # one conv per block (seed_net template): the first conv is the whole block
+        elif self.residual:
             x = Conv2D(params["unit_c1"] * params['num_neurons'] , (3, 3), padding="same")(x)
             x = self._add_residual(inputs, x, params['unit_c1'] * params['num_neurons'], params['activation'], reg_layer, stride=stride)
         else:
@@ -129,7 +132,14 @@ class TFModel(TunerModel):
             # x = Dropout(params["dr_f"])(x)
             x = MaxPooling2D(pool_size=(2, 2))(x)
 
-        x = GlobalAveragePooling2D()(x) if batch else Flatten()(x)
+        if batch:
+            x = GlobalAveragePooling2D()(x)
+        else:
+            # seed_net template: one more MaxPooling before the Flatten (keeps the
+            # spatial layout, 1/4 of the Dense params of a plain Flatten)
+            if x.shape[1] >= 2 and x.shape[2] >= 2:
+                x = MaxPooling2D(pool_size=(2, 2))(x)
+            x = Flatten()(x)
         
         # If ROI dataset, concatenate the position features with x
         pos_input = None

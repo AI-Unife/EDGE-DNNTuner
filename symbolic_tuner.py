@@ -1,5 +1,6 @@
 from __future__ import annotations
 import argparse
+import numpy as np
 import time
 import sys
 import os
@@ -9,6 +10,7 @@ from typing import List
 from pathlib import Path 
 
 from skopt.space import Categorical, Space
+from scipy.optimize import OptimizeResult
 
 from components.colors import colors
 from components.controller import controller
@@ -99,6 +101,8 @@ def run_optimization(base_space: Space, first_ss: search_space, ctrl: controller
     res = None
     
     sampler = strategy.sampler_factory(cfg.seed, max_iter)
+    # seed_net: the first evaluated point is the small reference network
+    seed_pending = bool(cfg.get("seed_net", False))
 
     # --- 2. Main Optimization Loop ---
     # We use ctrl.iter (which starts at 1) and loop *while* it's <= max_iter
@@ -121,8 +125,15 @@ def run_optimization(base_space: Space, first_ss: search_space, ctrl: controller
         # --- 3. Run One Step of Optimization ---
         step3_t0 = time.perf_counter()
         try:
-            res = sampler.step(obj_fn.objective, base_space, const_space, x0, y0,
-                               space_constraint=space_constraint, callback=callback)
+            if seed_pending:
+                # First point = the small reference network (no sampling)
+                seed_pending = False
+                seed = search_space.seed_point(base_space)
+                res = OptimizeResult(x_iters=[seed], func_vals=np.array([obj_fn.objective(seed)]))
+                res.x, res.fun = seed, res.func_vals[0]
+            else:
+                res = sampler.step(obj_fn.objective, base_space, const_space, x0, y0,
+                                   space_constraint=space_constraint, callback=callback)
         except Exception as e:
             # Fallback: If the step fails (e.g., GP matrix inversion),
             # try a random step to get new data.
@@ -223,6 +234,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--params_cut', action='store_true',
                         help="Without flops_module: networks with more than --nparams_th params are not "
                              "trained (penalty score), no symbolic rules are added")
+    parser.add_argument('--layerwise_lr', action='store_true',
+                        help="TF: use the LayerWiseLR optimizer wrapper (Conv2D gradients scaled by 1/sqrt(2) per layer)")
+    parser.add_argument('--seed_net', action='store_true',
+                        help="Start from the small reference network (1 conv per block, no BatchNorm, "
+                             "MaxPool + Flatten + Dense 64, Adam 1e-3): it is the first evaluated point")
     parser.add_argument(
         "--opt", type=str, default="filtered",
         choices=list(STRATEGIES),
@@ -310,9 +326,11 @@ if __name__ == "__main__":
     elif dataset_name == "cifar10_light" or dataset_name == "light_cifar" or dataset_name == "light":
         dataset.load_light_cifar()
     elif dataset_name == "gesture":
-        dataset.load_gesture()
+        # TF backend: train users in VAL_USERS become the validation set
+        # (EarlyStopping and tuner score on it, test only reported)
+        dataset.load_gesture(val_split=cfg.backend == "tf")
     elif "roigesture" in dataset_name:
-        dataset.load_roi_gesture()
+        dataset.load_roi_gesture(val_split=cfg.backend == "tf")
     elif dataset_name == "tinyimagenet":
         dataset.load_tiny_imagenet()
     elif dataset_name == "cca":

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, Iterable, Tuple
-from skopt.space import Categorical
+from skopt.space import Categorical, Integer
 import logging
 
 try:
@@ -191,17 +191,28 @@ class tuning_rules_symbolic:
         logger.info("Removed one conv section; remaining added sections: %d", self.controller.count_new_cv)
         self.controller.count_new_cv -= 1
 
+    def _set_layer_x_block_bound(self) -> None:
+        """When layer_x_block is a search-space dimension (seed_net), its upper bound
+        follows controller.layer_x_block (0 and 1 both mean one conv per block)."""
+        for i, hp in enumerate(self.space):
+            if hp.name == "layer_x_block":
+                self.space.dimensions[i] = Integer(0, max(1, self.controller.layer_x_block), name="layer_x_block")
+
     def inc_conv_layers(self) -> None:
         if self.controller.layer_x_block < self.controller.max_layer_x_block:
             self.controller.layer_x_block += 1
+            self._set_layer_x_block_bound()
             logger.info("Add one conv layer per section; new layers per sections: %d", self.controller.layer_x_block)
-        logger.info("No more convolutional layers per section to add")
+        else:
+            logger.info("No more convolutional layers per section to add")
 
     def dec_conv_layers(self) -> None:
-        if self.controller.layer_x_block < self.controller.max_layer_x_block:
+        if self.controller.layer_x_block > self.controller.min_layer_x_block:
             self.controller.layer_x_block -= 1
+            self._set_layer_x_block_bound()
             logger.info("Removed one conv layer per section; remaining layers per sections: %d", self.controller.layer_x_block)
-        logger.info("No more convolutional layers per section to remove")
+        else:
+            logger.info("No more convolutional layers per section to remove")
 
     # -------------------------- Hyperparam tweaks ----------------------------
 

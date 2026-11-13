@@ -57,8 +57,9 @@ def train_model(
         # Regular case: each sample is (data_frame, label)
         ds = tf.data.Dataset.from_tensor_slices((train_data, train_labels))
     
-    # Uncomment to enable shuffling & prefetch for performance:
-    # ds = ds.shuffle(buffer_size=min(4 * batch_size, 1000), reshuffle_each_iteration=True)
+    # Shuffle the recordings every epoch. The data comes sorted by user folder, so
+    # the buffer covers the whole train set (a small buffer only shuffles locally).
+    ds = ds.shuffle(buffer_size=len(train_labels), reshuffle_each_iteration=True)
     ds = ds.batch(batch_size)
     # ds = ds.prefetch(tf.data.AUTOTUNE)
 

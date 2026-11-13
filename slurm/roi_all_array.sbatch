@@ -54,4 +54,5 @@ python symbolic_tuner.py \
     --nparams_th "$NPARAMS_TH" \
     --epochs "$EPOCHS" --eval "$EVAL" \
     --name "$NAME" \
-    --params_cut
+    --params_cut \
+    --seed_net
