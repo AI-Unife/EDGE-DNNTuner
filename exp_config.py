@@ -35,6 +35,8 @@ class ConfigSchema:
     lacc: float = 0.10                           # Accuracy loss threshold (underfitting)
     flops_th: int = 150000000                    # Max number of FLOPS
     nparams_th: int = 2500000                    # Max number of PARAMS
+    params_cut: bool = False                     # Without flops_module: skip (penalty score) networks with
+                                                  # more than nparams_th params, no symbolic rules added
     opt: str = "filtered"                        # Optimizer type (standard | filtered | basic | RS | RS_ruled)
     # Gesture-specific parameters
     frames: int = 16                             # fwdPass: max sequence length (pad/truncate target); hybrid/depth: number of frames
@@ -55,7 +57,7 @@ _VALID_MODULES = {"hardware_module", "flops_module"}
 from components.optimizers import STRATEGIES
 _VALID_OPT = set(STRATEGIES)
 _VALID_BACKENDS = {"tf", "torch"}
-_VALID_DATASETS = {"light", "beans", "cifar10", "cifar100", "mnist", "tinyimagenet", "gesture", "roigesture_coords", "roigesture_matrix", "roigesture_3D",
+_VALID_DATASETS = {"light", "beans", "cifar10", "cifar100", "mnist", "tinyimagenet", "gesture", "roigesture_coords", "roigesture_matrix", "roigesture_matrix_fc", "roigesture_3D",
                    "roigesture_conv1d", "roigesture_channels", "cca", "cim"}
 # ROI datasets that split every delta_t frame into roi_k sub-windows (fixed delta_t framing only)
 ROI_K_DATASETS = {"roigesture_conv1d", "roigesture_channels"}
@@ -90,6 +92,7 @@ def create_config_file(exp_dir: str | Path, overrides: Optional[Dict[str, Any]] 
         "lacc": schema.lacc,
         "flops_th": schema.flops_th,
         "nparams_th": schema.nparams_th,
+        "params_cut": schema.params_cut,
         "opt": schema.opt,
         "frames": schema.frames,
         "delta_t": schema.delta_t,
@@ -224,6 +227,7 @@ def _apply_defaults(d: Dict[str, Any]) -> Dict[str, Any]:
         "lacc": d.get("lacc", schema.lacc),
         "flops_th": d.get("flops_th", schema.flops_th),
         "nparams_th": d.get("nparams_th", schema.nparams_th),
+        "params_cut": d.get("params_cut", schema.params_cut),
         "opt": d.get("opt", schema.opt),
         "frames": d.get("frames", schema.frames),
         "delta_t": d.get("delta_t", schema.delta_t),

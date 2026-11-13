@@ -220,6 +220,9 @@ def parse_args() -> argparse.Namespace:
                          help="Max number of FLOPS")
     parser.add_argument('--nparams_th', type=int, default=300000,
                         help="Max number of PARAMS")
+    parser.add_argument('--params_cut', action='store_true',
+                        help="Without flops_module: networks with more than --nparams_th params are not "
+                             "trained (penalty score), no symbolic rules are added")
     parser.add_argument(
         "--opt", type=str, default="filtered",
         choices=list(STRATEGIES),
@@ -319,7 +322,7 @@ if __name__ == "__main__":
     elif dataset_name == "beans":
         dataset.load_beans()
     else:
-        print(f"Unknown dataset: {cfg.dataset}. Supported: cifar10, cifar100, mnist, beans, light, gesture, roigesture_matrix, roigesture_coords, roigesture_conv1d, roigesture_channels, cca, cim.")
+        print(f"Unknown dataset: {cfg.dataset}. Supported: cifar10, cifar100, mnist, beans, light, gesture, roigesture_matrix, roigesture_matrix_fc, roigesture_coords, roigesture_conv1d, roigesture_channels, cca, cim.")
         exit(1)
 
     # --- 3. Controller and Space Setup ---

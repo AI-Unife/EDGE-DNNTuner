@@ -193,7 +193,11 @@ class DVSGestureROI(DVSGesture):
     def __getitem__(self, index):
         events = np.load(self.data[index])
         target = self.targets[index]
-        position = np.load(self.position[index])
+        # ROI top-left corner -> ROI centre (+16 per axis, clipped to 0..127),
+        # as components/gesture_dataset.center_roi_positions
+        position = np.load(self.position[index]).copy()
+        for axis in ("x", "y"):
+            position[axis] = np.clip(position[axis] + 16, 0, 127)
         if self.transform is not None:
             events = self.transform(events)
         if self.target_transform is not None:

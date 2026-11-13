@@ -86,10 +86,40 @@ def generate_roi_k_params_file(output_path: str = "params_roi_k.txt",
     print(f"✅ '{output_path}': {len(lines)} jobs; '{cache_output_path}': {len(dt_k)} cache builds.")
 
 
+def generate_roi_all_params_file(output_path: str = "params_roi_all.txt",
+                                 cache_output_path: str = "params_roi_all_cache.txt"):
+    """
+    Job array re-running every ROI variant at 5, 10, 100 and 200 ms (fixed
+    delta_t framing on train and test).
+
+    params_roi_all.txt       -> one line per job:  dataset,mode,delta_t,roi_k,seed
+                                (roi_k = 0 for the variants without sub-windows)
+    params_roi_all_cache.txt -> one line per cache: delta_t,roi_k
+                                (roi_k = 0: plain delta_t ROI cache, shared by
+                                coords / matrix / matrix_fc and all seeds)
+    roi_k as in generate_roi_k_params_file: 5 at 5 ms, 10 otherwise.
+    """
+    plain_datasets = ["roigesture_coords", "roigesture_matrix", "roigesture_matrix_fc"]
+    roi_k_datasets = ["roigesture_conv1d", "roigesture_channels"]
+    seeds = [42, 7, 96]
+    dt_k = [(5000, 5), (10000, 10), (100000, 10), (200000, 10)]  # (delta_t us, roi_k)
+
+    jobs = [(dataset, dt, 0) for dataset, (dt, _) in product(plain_datasets, dt_k)]
+    jobs += [(dataset, dt, k) for dataset, (dt, k) in product(roi_k_datasets, dt_k)]
+    lines = [f"{dataset},fwdPass,{dt},{k},{seed}" for (dataset, dt, k), seed in product(jobs, seeds)]
+    caches = [(dt, 0) for dt, _ in dt_k] + dt_k
+    Path(output_path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    Path(cache_output_path).write_text("\n".join(f"{dt},{k}" for dt, k in caches) + "\n", encoding="utf-8")
+    print(f"✅ '{output_path}': {len(lines)} jobs; '{cache_output_path}': {len(caches)} cache builds.")
+
+
 def main():
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == "roi_k":
         generate_roi_k_params_file()
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "roi_all":
+        generate_roi_all_params_file()
         return
     job_configs = generate_jobs()
     # save_job_configs_to_file(job_configs, "params.txt")

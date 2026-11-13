@@ -103,6 +103,10 @@ class controller:
             self.flops_th = self.modules.get_module("flops_module").flops_th
             self.params_th = self.modules.get_module("flops_module").nparams_th
             self.weight_flops = self.exp_cfg.w_flops
+        # params_cut: hard cut on the number of params without the flops_module rules
+        self.params_cut = bool(self.exp_cfg.get("params_cut", False)) and "flops_module" not in self.exp_cfg.mod_list
+        if self.params_cut:
+            self.params_th = self.exp_cfg.nparams_th
         if "hardware_module" in self.exp_cfg.mod_list:
             max_latency = self.modules.get_module("hardware_module").max_latency
             max_cost = self.modules.get_module("hardware_module").max_cost
@@ -248,6 +252,8 @@ class controller:
         # 3. Check Constraints 
         if "flops_module" in self.exp_cfg.mod_list:
             self.flops_ok = (self.nn.flops is None) or (self.nn.flops <= self.flops_th and self.nn.nparams <= self.params_th)
+        elif self.params_cut:
+            self.flops_ok = (self.nn.nparams is None) or (self.nn.nparams <= self.params_th)
         else:
             self.flops_ok = True
             
@@ -260,7 +266,9 @@ class controller:
         else:
             self.latency_ok = True
 
-        if not self.flops_ok:
+        if not self.flops_ok and self.params_cut:
+            print(f"[WARNING] Constraint Violated: Params {self.nn.nparams} > {self.params_th} (params_cut, network not trained)")
+        elif not self.flops_ok:
             print(f"[WARNING] Constraint Violated: FLOPs {self.nn.flops} > {self.flops_th} or Params {self.nn.nparams} > {self.params_th}")
         if not self.latency_ok:
             print(f"[WARNING] Constraint Violated: Latency Cost {self.nn.tot_latency_cost} > {self.latency_th}")
@@ -398,18 +406,25 @@ class controller:
                 # Create/refresh the symbolic problem file
                 self.nsb.build_sym_prob(self.problems)
 
-            # If we have improvement data, update the symbolic model probabilities
-            if improv is not None:
-                _, lfi_problem = self.lfi.learning(
-                    improv, self.symbolic_tuning, self.symbolic_diagnosis, self.actions
-                )
-                sy_model = lfi_problem.get_model()
-                self.nsb.edit_probs(sy_model)
+            if self.params_cut and not self.flops_ok:
+                # params_cut without modules: a cut network has no facts to reason on,
+                # it only gets the penalty score (no LFI update, no repair).
+                print("[INFO] params_cut: network over the params limit, symbolic diagnosis skipped")
+                diagnosis_logs.write(f"iter {self.iter}: params_cut, {self.nn.nparams} > {self.params_th} params, skipped\n")
+                self.symbolic_tuning, self.symbolic_diagnosis = [], []
+            else:
+                # If we have improvement data, update the symbolic model probabilities
+                if improv is not None:
+                    _, lfi_problem = self.lfi.learning(
+                        improv, self.symbolic_tuning, self.symbolic_diagnosis, self.actions
+                    )
+                    sy_model = lfi_problem.get_model()
+                    self.nsb.edit_probs(sy_model)
 
-            # Run rule-based reasoning to produce candidate repairs and diagnoses
-            self.symbolic_tuning, self.symbolic_diagnosis = self.nsb.symbolic_reasoning(
-                facts_list_module, diagnosis_logs, tuning_logs, self.rules, self, const_space
-            )
+                # Run rule-based reasoning to produce candidate repairs and diagnoses
+                self.symbolic_tuning, self.symbolic_diagnosis = self.nsb.symbolic_reasoning(
+                    facts_list_module, diagnosis_logs, tuning_logs, self.rules, self, const_space
+                )
 
 
         print(colors.CYAN, "| END SYMBOLIC DIAGNOSIS   ----------------------------------  |\n", colors.ENDC)

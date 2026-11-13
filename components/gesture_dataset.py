@@ -29,6 +29,20 @@ def n_window_frames(delta_t: int) -> int:
     return n
 
 
+# ROI position events store the top-left corner of the 32x32 ROI on the 128x128
+# sensor (-16..112): shift them to the ROI centre, clipped to the sensor pixels.
+ROI_HALF = 16
+SENSOR_SIZE = 128
+
+
+def center_roi_positions(position: np.ndarray) -> np.ndarray:
+    """ROI position events: top-left corner -> ROI centre (+ROI_HALF per axis, clipped to 0..127)."""
+    position = position.copy()
+    for axis in ("x", "y"):
+        position[axis] = np.clip(position[axis] + ROI_HALF, 0, SENSOR_SIZE - 1)
+    return position
+
+
 def roi_sub_window(cfg) -> int:
     """Sub-window length (us) of the roi_k datasets: delta_t // roi_k, >= 1 ms."""
     k, dt = int(cfg.roi_k), int(cfg.delta_t)
@@ -223,7 +237,7 @@ class DVSGestureROI(DVSGesture):
         """
         events = np.load(self.data[index])
         target = self.targets[index]
-        position = np.load(self.position[index])
+        position = center_roi_positions(np.load(self.position[index]))
         if self.transform is not None:
             events = self.transform(events)
         if self.target_transform is not None:
@@ -480,8 +494,12 @@ def dataset_to_numpy(dataset, cfg, delta_t_framing: bool = True) -> Tuple[np.nda
                     raise ValueError(f"roigesture_matrix: position map {None if pos is None else pos.shape} "
                                      f"does not match the event frames {x_reshaped.shape}")
                 x_list.append(np.concatenate([x_reshaped, pos.astype(x_reshaped.dtype)], axis=-1))
+            elif cfg.dataset == "roigesture_matrix_fc":
+                # Old roigesture_matrix: the position map is a second input, flattened
+                # and concatenated to the conv features before the FC layers.
+                x_list.append({"data": x_reshaped, "pos": pos})
             else:
-                print(f"ERROR: Unrecognized ROI dataset type '{cfg.dataset}'; expected one of 'roigesture_coords', 'roigesture_matrix', {sorted(ROI_K_DATASETS)}.")
+                print(f"ERROR: Unrecognized ROI dataset type '{cfg.dataset}'; expected one of 'roigesture_coords', 'roigesture_matrix', 'roigesture_matrix_fc', {sorted(ROI_K_DATASETS)}.")
                 exit(-1)
         else:
             # Non-ROI: plain arrays
