@@ -1,5 +1,5 @@
 #!/bin/bash
-# Symbolic DNN-Tuner on every ROI variant, one array task per line of
+# Symbolic DNN-Tuner on full-frame gesture and every ROI variant, one array task per line of
 # params_roi_all.txt (dataset,mode,delta_t,roi_k,seed; roi_k = 0 for the variants
 # without sub-windows). Submitted by slurm/submit_roi_all.sh after the cache array.
 # No symbolic module: --params_cut skips (penalty score) networks above NPARAMS_TH.
@@ -27,6 +27,9 @@ LINE=$(sed -n "${SLURM_ARRAY_TASK_ID}p" params_roi_all.txt)
 IFS=',' read -r DATASET MODE DELTA_T ROI_K SEED <<< "$LINE"
 ROI_K_ARGS=()
 K_TAG=""
+# seed_net template only for the ROI datasets (full-frame gesture without it)
+SEED_NET_ARGS=(--seed_net)
+[[ "$DATASET" == "gesture" ]] && SEED_NET_ARGS=()
 if (( ROI_K > 0 )); then
     ROI_K_ARGS=(--roi_k "$ROI_K")
     K_TAG="_k${ROI_K}"
@@ -55,4 +58,4 @@ python symbolic_tuner.py \
     --epochs "$EPOCHS" --eval "$EVAL" \
     --name "$NAME" \
     --params_cut \
-    --seed_net
+    ${SEED_NET_ARGS[@]+"${SEED_NET_ARGS[@]}"}

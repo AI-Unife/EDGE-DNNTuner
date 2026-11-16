@@ -12,9 +12,13 @@ not rebuild that pair again.
 (./cache/DVS_ROI_<fs>_fwdPass_trte<dt>_tete<dt>_2/), shared by roigesture_coords,
 roigesture_matrix and roigesture_matrix_fc (slurm/submit_roi_all.sh).
 
+--dataset gesture builds the full-frame DVSGesture delta_t cache
+(./cache/DVSGesture_fwdPass_trte<dt>_tete<dt>_2/) instead (--roi_k ignored).
+
 Usage:
     python build_roi_k_cache.py --delta_t 10000 --roi_k 10
     python build_roi_k_cache.py --delta_t 10000 --roi_k 0
+    python build_roi_k_cache.py --delta_t 10000 --roi_k 0 --dataset gesture
 """
 import argparse
 from pathlib import Path
@@ -24,12 +28,40 @@ from exp_config import create_config_file, set_active_config, load_cfg
 CACHE_MARKER = ".complete"
 
 
+def build_gesture_cache(delta_t: int):
+    cfg_dir = Path("cache_cfg") / f"gesture_dt{delta_t}"
+    cfg_path = create_config_file(cfg_dir, {
+        "dataset": "gesture", "mode": "fwdPass", "name": str(cfg_dir), "delta_t": delta_t,
+        "train_framing": "delta_t", "test_framing": "delta_t",
+    })
+    set_active_config(cfg_path)
+    cfg = load_cfg(force=True)
+
+    from components.gesture_dataset import get_datasets_numpy
+    (x_train, _), (x_test, _) = get_datasets_numpy(cfg)
+    print(f"[build_roi_k_cache] gesture delta_t={delta_t}: "
+          f"{len(x_train)} train / {len(x_test)} test recordings kept")
+    if not len(x_train) or not len(x_test):
+        raise SystemExit("[build_roi_k_cache] empty split: DVSGesture missing or unreadable, cache NOT marked complete")
+    tag = f"te{delta_t}"
+    cache_dir = Path("cache") / f"DVSGesture_fwdPass_tr{tag}_te{tag}_{cfg.channels}"
+    if not cache_dir.is_dir():
+        raise SystemExit(f"[build_roi_k_cache] expected cache folder {cache_dir} not found")
+    (cache_dir / CACHE_MARKER).write_text(f"{len(x_train)} train / {len(x_test)} test\n")
+    print(f"[build_roi_k_cache] marked {cache_dir} complete")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--delta_t", type=int, required=True, help="frame length in us")
     ap.add_argument("--roi_k", type=int, required=True, help="sub-windows per frame (0: plain delta_t ROI cache)")
     ap.add_argument("--frame_size", type=int, default=32)
+    ap.add_argument("--dataset", choices=["roi", "gesture"], default="roi",
+                    help="roi: ROI caches (default); gesture: full-frame DVSGesture cache")
     args = ap.parse_args()
+    if args.dataset == "gesture":
+        build_gesture_cache(args.delta_t)
+        return
 
     cfg_dir = Path("cache_cfg") / f"roi_k_dt{args.delta_t}_k{args.roi_k}"
     cfg_dict = {

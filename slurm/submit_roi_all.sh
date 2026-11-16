@@ -1,7 +1,9 @@
 #!/bin/bash
-# Re-run every ROI experiment on Leonardo (account IscrC_NESY) at 5, 10, 100 and
-# 200 ms, fixed delta_t framing on train and test, 3 seeds:
-#   roigesture_coords, roigesture_matrix, roigesture_matrix_fc   (roi_k = 0)
+# Re-run full-frame gesture and every ROI experiment on Leonardo (account IscrC_NESY)
+# at 5, 10, 100 and 200 ms (or the delta_t list given as first argument, in us),
+# fixed delta_t framing on train and test, 3 seeds:
+#   gesture (no --seed_net), roigesture_coords, roigesture_matrix,
+#   roigesture_matrix_fc                                          (roi_k = 0)
 #   roigesture_conv1d, roigesture_channels                       (roi_k = 5 at 5 ms, 10 otherwise)
 # No symbolic module (no flops_module): networks above 300K params are cut with
 # --params_cut (not trained, penalty score), see slurm/roi_all_array.sbatch.
@@ -24,25 +26,28 @@ mkdir -p "$LOGS_DIR" "$RESULTS_DIR"
 echo "results -> $RESULTS_DIR"
 echo "logs    -> $LOGS_DIR"
 
-"$VENV_DIR/bin/python" multi_sbatch.py roi_all   # writes params_roi_all.txt + params_roi_all_cache.txt
+# optional delta_t list (us):  bash slurm/submit_roi_all.sh 20000,50000   (default 5/10/100/200 ms)
+"$VENV_DIR/bin/python" multi_sbatch.py roi_all ${1:-}   # writes params_roi_all.txt + params_roi_all_cache.txt
 
 N_JOBS=$(grep -c . params_roi_all.txt)
 
 # --- caches still to build ------------------------------------------------------
 CACHE_TODO=params_roi_all_cache_todo.txt
 : > "$CACHE_TODO"
-while IFS=',' read -r DT K; do
+while IFS=',' read -r DT K DS; do
     [[ -z "$DT" ]] && continue
-    if (( K > 0 )); then
+    if [[ "$DS" == "gesture" ]]; then
+        DIR="cache/DVSGesture_fwdPass_trte${DT}_tete${DT}_2"
+    elif (( K > 0 )); then
         DIR="cache/DVS_ROI_32_fwdPass_trte${DT}k${K}_tete${DT}k${K}_2"
     else
         DIR="cache/DVS_ROI_32_fwdPass_trte${DT}_tete${DT}_2"
     fi
     if [[ -f "$DIR/.complete" ]]; then
-        echo "cache ok      : dt=$DT k=$K"
+        echo "cache ok      : dt=$DT k=$K ${DS:-roi}"
     else
-        echo "cache to build: dt=$DT k=$K"
-        echo "$DT,$K" >> "$CACHE_TODO"
+        echo "cache to build: dt=$DT k=$K ${DS:-roi}"
+        echo "$DT,$K${DS:+,$DS}" >> "$CACHE_TODO"
     fi
 done < params_roi_all_cache.txt
 N_CACHE=$(grep -c . "$CACHE_TODO" || true)
