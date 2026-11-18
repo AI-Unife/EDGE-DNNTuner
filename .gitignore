@@ -22,3 +22,12 @@ prova.py
 gesture/*
 *.h5
 test_gesture/*
+
+# FP-quantizer experiments (experiments/fp_quantizers): results and cached weights
+seed_repro_cache/
+seed_repro_results.csv
+alice_quantizer_results*.csv
+alice_experiments.csv
+alice_weight_variances.csv
+test_fp/
+.pytest_cache/
