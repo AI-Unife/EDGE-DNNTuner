@@ -23,7 +23,7 @@ EPOCHS=${EPOCHS:-100}      # override with: EPOCHS=... bash slurm/submit_roi_all
 EVAL=${EVAL:-300}          # symbolic_tuner.py default
 
 # RESULTS_DIR = $WORK/$USER/tuner/results (slurm/leonardo_config.sh)
-LINE=$(sed -n "${SLURM_ARRAY_TASK_ID}p" params_roi_all.txt)
+LINE=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "${PARAMS_FILE:-params_roi_all.txt}")
 IFS=',' read -r DATASET MODE DELTA_T ROI_K SEED <<< "$LINE"
 ROI_K_ARGS=()
 K_TAG=""
