@@ -3,12 +3,11 @@
 # (delta_t,roi_k). Submitted by slurm/submit_roi_k.sh before the tuner array.
 #SBATCH --job-name=roi_k_cache
 #SBATCH --account=IscrC_NESY
-#SBATCH --partition=boost_usr_prod
+#SBATCH --partition=lrd_all_serial
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
-#SBATCH --gres=gpu:1
-#SBATCH --mem=120G
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=30000M
 #SBATCH --time=04:00:00
 #SBATCH --output=logs/roi_k_cache_%A_%a.out
 #SBATCH --error=logs/roi_k_cache_%A_%a.err
