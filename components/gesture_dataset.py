@@ -424,8 +424,9 @@ def dataset_to_numpy(dataset, cfg, delta_t_framing: bool = True, return_index: b
                 if x_reshaped.shape[0] < n_cut or (pos is not None and pos.shape[0] < n_cut):
                     n_short += 1
                     continue
-                x_reshaped = x_reshaped[:n_cut]
-                pos = pos[:n_cut] if pos is not None else None
+                # .copy(): a slice is a view that keeps the whole recording in memory
+                x_reshaped = x_reshaped[:n_cut].copy()
+                pos = pos[:n_cut].copy() if pos is not None else None
             if cfg.dataset in ROI_K_DATASETS:
                 if pos is None:
                     raise ValueError(f"{cfg.dataset}: missing ROI position map")
@@ -515,7 +516,8 @@ def dataset_to_numpy(dataset, cfg, delta_t_framing: bool = True, return_index: b
                 if x_reshaped.shape[0] < n_keep:
                     n_short += 1
                     continue
-                x_reshaped = x_reshaped[:n_keep]
+                # .copy(): a slice is a view that keeps the whole recording in memory
+                x_reshaped = x_reshaped[:n_keep].copy()
             x_list.append(x_reshaped)
 
         if crop:
