@@ -268,28 +268,38 @@ class controller:
             # Update Modules State (pass the trained model)
             self.modules.state(self.model, self.nn.flops, self.nn.nparams)
             
-            # # --- SCORING LOGIC ---
-            # ### TODO: quantizer section
-            # sqnr = ...
-            # if sqnr > 0.0:
-            #     import quantizer.quantizer_POTQ as quantizer_module
-            # elif sqnr < 0.0:
-            #     import quantizer.quantizer_POTQ as quantizer_module
-            # quantizer = quantizer_module.quantizer_module(opt=params["optimizer"])
-            # _ = quantizer.quantizer_function(self.model)
-            # q_loss, q_acc = quantizer.evaluate_quantized_model(self.dataset.X_test, self.dataset.Y_test)  
-            
+            # --- SCORING LOGIC ---
+            ### quantizer section
+            # Accuracy used in the score: validation accuracy of the float network or, with
+            # --quantization, the accuracy of the quantized network. The quantizer is the candidate
+            # with the highest SQNR for the weights of this network (quantizer/quantizer_selector.py,
+            # formulas in quantizer/distortion.py). Only for the TensorFlow backend.
+            score_acc = self.scoreNN[1]
+            if self.exp_cfg.quantization and self.exp_cfg.backend == "tf":
+                from quantizer.quantizer_selector import select_best_quantizer
+                quantizer_module, _report = select_best_quantizer(
+                    self.model, log_dir=f"{self.exp_cfg.name}/algorithm_logs")
+                quantizer = quantizer_module.quantizer_module(opt=params["optimizer"])
+                _ = quantizer.quantizer_function(self.model)
+                q_loss, q_acc = quantizer.evaluate_quantized_model(self.dataset.X_test, self.dataset.Y_test)
+                quantizer.log_function()
+                print(f"[INFO] Quantized with {quantizer_module.__name__.split('.')[-1]}: "
+                      f"accuracy {q_acc:.4f} (float network: {self.scoreNN[1]:.4f})")
+                score_acc = float(q_acc)
+            elif self.exp_cfg.quantization:
+                print("[WARNING] Quantization is implemented only for the TensorFlow backend: skipped.")
+
             if "flops_module" in self.exp_cfg.mod_list:
                 _, _, opt_value = self.modules.optimiziation()
-                val_acc = self.scoreNN[1]
+                val_acc = score_acc
                 self.score = -(abs(val_acc- opt_value))
             elif (len(self.modules.modules_obj) > 0) and self.modules.ready() and self.modules.all_zeros_weights():
                 _, _, opt_value = self.modules.optimiziation()
-                val_acc = self.scoreNN[1]
+                val_acc = score_acc
                 print(f"[DEBUG] Combined Score: {opt_value:.4f} (HW+FLOPs) and Validation Accuracy: {val_acc:.4f}")
                 self.score = float(opt_value) - (val_acc * self.acc_w)
             else:
-                self.score = -float(self.scoreNN[1]) 
+                self.score = -float(score_acc)
 
             # 5. Logging
             self.log()
